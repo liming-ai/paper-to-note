@@ -46,6 +46,64 @@ def resize_image(path: str, max_width: int = MAX_WIDTH):
         pass  # Pillow not available, skip resize
 
 
+def trim_whitespace(path: str, threshold: int = 245, pad: int = 24) -> bool:
+    """Trim near-white margins from a bitmap figure in-place.
+
+    Returns True when the image was cropped. SVG/PDF files are intentionally
+    ignored; use source-aware cropping or compose mode for vector figures.
+    """
+    if os.path.splitext(path)[1].lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        return False
+    try:
+        from PIL import Image, ImageChops
+    except ImportError:
+        return False
+
+    img = Image.open(path)
+    if img.mode == "RGBA":
+        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        bg.alpha_composite(img)
+        rgb = bg.convert("RGB")
+    else:
+        rgb = img.convert("RGB")
+
+    white = Image.new("RGB", rgb.size, (255, 255, 255))
+    diff = ImageChops.difference(rgb, white)
+    r, g, b = diff.split()
+    max_diff = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    tolerance = max(0, 255 - threshold)
+    mask = max_diff.point(lambda v: 255 if v > tolerance else 0)
+    bbox = mask.getbbox()
+    if not bbox:
+        return False
+
+    x0, y0, x1, y1 = bbox
+    x0 = max(0, x0 - pad)
+    y0 = max(0, y0 - pad)
+    x1 = min(rgb.width, x1 + pad)
+    y1 = min(rgb.height, y1 + pad)
+    new_w, new_h = x1 - x0, y1 - y0
+    if new_w >= rgb.width * 0.98 and new_h >= rgb.height * 0.98:
+        return False
+
+    cropped = rgb.crop((x0, y0, x1, y1))
+    cropped.save(path, optimize=True)
+    print(f"  trimmed {os.path.basename(path)}: {rgb.width}x{rgb.height} -> {new_w}x{new_h}")
+    return True
+
+
+def trim_output_dir_images(output_dir: str, threshold: int = 245, pad: int = 24) -> int:
+    """Trim near-white margins for all bitmap figures under output_dir."""
+    count = 0
+    for root, _, files in os.walk(output_dir):
+        for filename in files:
+            if filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                if trim_whitespace(os.path.join(root, filename), threshold=threshold, pad=pad):
+                    count += 1
+    print(f"\nTrimmed whitespace in {count} bitmap figures under {output_dir}")
+    return count
+
+
 def extract_from_arxiv_source(arxiv_id: str, output_dir: str):
     """Download arxiv source tarball and extract original figure files."""
     os.makedirs(output_dir, exist_ok=True)
@@ -398,6 +456,12 @@ if __name__ == "__main__":
                         help="Page numbers for PDF full-page mode")
     parser.add_argument("--compose", nargs="+", type=str,
                         help="Compose grouped subfigures: output:layout:image1,image2,... (layout row, column, or NxM)")
+    parser.add_argument("--trim", action="store_true",
+                        help="Trim near-white margins from bitmap figures in output_dir after extraction/compose")
+    parser.add_argument("--trim-threshold", type=int, default=245,
+                        help="Near-white threshold for --trim (default: 245)")
+    parser.add_argument("--trim-pad", type=int, default=24,
+                        help="Padding in pixels kept around detected content for --trim (default: 24)")
     args = parser.parse_args()
 
     if args.arxiv:
@@ -411,9 +475,14 @@ if __name__ == "__main__":
         render_pdf_pages(args.pdf, args.output_dir, getattr(args, 'pages', None))
     elif args.compose:
         pass
+    elif args.trim:
+        pass
     else:
-        print("ERROR: Specify --arxiv <id> or --pdf <path>")
+        print("ERROR: Specify --arxiv <id>, --pdf <path>, --compose, or --trim")
         sys.exit(1)
 
     if args.compose:
         compose_grouped_figures(args.output_dir, args.compose)
+
+    if args.trim:
+        trim_output_dir_images(args.output_dir, threshold=args.trim_threshold, pad=args.trim_pad)

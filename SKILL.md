@@ -11,50 +11,36 @@ allowed-tools:
   - WebFetch
   - WebSearch
   - Agent
+  - mcp__codex__codex
 ---
 
 # Paper-to-Note
 
 Generate high-quality structured reading notes for academic papers.
 
-## User Configuration（使用前必须修改）
-
-Before using this skill, set the following paths to match your local setup:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VAULT_NAME` | `paper_notes` | Your Obsidian vault name |
-| `VAULT_PATH` | `~/paper_notes` | Absolute path to your Obsidian vault |
-| `PAPERS_DIR` | `~/papers` | Directory to store downloaded PDFs |
-| `SKILLS_DIR` | `~/ai-skills/skills` | Directory for paper-to-skill skills (optional, for cross-linking) |
-
-Replace all occurrences of these paths in the sections below to match your environment.
-The `obsidian` CLI ([obsidian-cli](https://github.com/Yakitrak/obsidian-cli)) must be installed and configured with your vault.
-
 ## Scope（与 paper-to-skill 的分工）
 
 - **本 skill 目的**：生成"阅读笔记"，让人类读者**读懂论文**（motivation / 核心贡献 / 方法直觉）。
-- **如果你的目标是"把算法植入新 codebase"**（需要逐行代码映射、Porting Checklist、commit 锚点、模块接口 contracts）：请使用 `paper-to-skill` skill，产物在 `$SKILLS_DIR`。
+- **如果你的目标是"把算法植入新 codebase"**（需要逐行代码映射、Porting Checklist、commit 锚点、模块接口 contracts）：请使用 `paper-to-skill` skill，产物在 `~/ai-skills/skills/`。
 - **最佳工作流**：先用本 skill 读懂，再用 `paper-to-skill` 提炼工程手册。本 skill 在保存笔记时，如果已有对应 paper-to-skill skill，会自动填写 frontmatter 的 `paper_to_skill` 属性以便互相跳转。
 
 ## Shared Infrastructure
 
-- `$SKILL_ROOT/_shared/commit-anchor.md` — commit SHA 锚点格式（Pitfall P5 引用）
-- `$SKILL_ROOT/_shared/pseudocode-rules.md` — 伪代码质量规则
-- `$SKILL_ROOT/_shared/known-categories.md` — Obsidian 分类
-- `$SKILL_ROOT/scripts/extract_figures.py` — 图像提取脚本
+- `~/.claude/skills/_shared/commit-anchor.md` — commit SHA 锚点格式（Pitfall P5 引用）
+- `~/.claude/skills/_shared/pseudocode-rules.md` — 伪代码质量规则
+- `~/.claude/skills/_shared/known-categories.md` — Obsidian 分类
+- `~/.claude/skills/_shared/extract_figures.py` — 图像提取（paper-to-note/scripts/extract_figures.py 是其软链）
 
 ### Runtime Path Fallback（跨 runtime 路径约定）
 
-`$SKILL_ROOT` 指本 skill 的安装根目录。在不同 runtime 下物理路径不同：
+本 skill 同时存在两份副本，在不同 runtime 下读取不同的物理路径（内容保持一致）：
 
-| 逻辑变量 | Claude Code | Cursor / Codex / 其他 |
+| 逻辑引用 | Claude Code 原生路径 | Cursor / Codex / 其他共享 runtime |
 |---|---|---|
-| `$SKILL_ROOT` | `~/.claude/skills/paper-to-note` | `~/.agents/skills/paper-to-note` |
-| `$REVIEWER` | `$SKILL_ROOT/agents/paper-to-note-reviewer.md` | 同左 |
-| `$SCRIPTS` | `$SKILL_ROOT/scripts` | 同左 |
+| `$SHARED/<file>` | `~/.claude/skills/_shared/<file>` | `~/.agents/skills/_shared/<file>` |
+| `$REVIEWER` | `~/.claude/agents/paper-to-note-reviewer.md` | `~/.agents/skills/paper-to-note/agents/paper-to-note-reviewer.md` |
 
-下文所有路径引用中，`$SKILL_ROOT` 代表本 skill 实际安装的目录。执行时替换为当前 runtime 下的真实路径即可。
+下文所有 `~/.claude/skills/_shared/...` 与 `~/.claude/agents/paper-to-note-reviewer.md` 引用，执行时按上表选择**当前 runtime 下实际存在**的那条路径即可（两条路径等价）。
 
 
 ## Context Budget Rules（必须遵守）
@@ -203,18 +189,18 @@ Output strictly in these 5 sections, each with substantive content:
 - **User gave a link**: prefer `WebFetch` for normal web pages; **if `WebFetch` fails with domain safety verification / enterprise policy errors, immediately fall back to `Bash(curl -L ...)` or `python urllib/request`** and continue.
 - **arXiv links**: use `curl` as the default path in proxy/offline-routed runtimes; fetch the HTML abstract page and PDF directly:
   ```bash
-  curl -L "https://arxiv.org/abs/<arxiv_id>" -o $PAPERS_DIR/<arxiv_id>.html
-  curl -L "https://arxiv.org/pdf/<arxiv_id>" -o $PAPERS_DIR/<arxiv_id>.pdf
+  curl -L "https://arxiv.org/abs/<arxiv_id>" -o ~/ai-skills/papers/<arxiv_id>.html
+  curl -L "https://arxiv.org/pdf/<arxiv_id>" -o ~/ai-skills/papers/<arxiv_id>.pdf
   ```
 - **Only a title given**: use `WebSearch` to find the paper, then fetch it
-- **Always download PDF** to `$PAPERS_DIR/` for figure extraction
+- **Always download PDF** to `~/ai-skills/papers/` for figure extraction
 
 ### Step 2: Extract original figures
 
 **For arxiv papers (preferred)**: download source tarball to get original high-res figure files:
 
 ```bash
-python3 $SKILL_ROOT/scripts/extract_figures.py \
+python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py \
   --arxiv <arxiv_id> <notes_image_dir>
 ```
 
@@ -228,7 +214,7 @@ When the arXiv source places multiple panels under one `figure` caption (e.g. `s
 - Preferred output: create one composite file named like `fig3_group.svg` / `fig3_abc.svg` matching the source/PDF layout, then embed it once at normal width.
 - Use the helper after extraction when panels are separate files:
   ```bash
-  python3 $SKILL_ROOT/scripts/extract_figures.py \
+  python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py \
     <notes_image_dir> \
     --compose "fig3_group:row:breakdown.svg,quant_degradation.svg,quant_proxy.svg"
   ```
@@ -237,11 +223,26 @@ When the arXiv source places multiple panels under one `figure` caption (e.g. `s
 
 **After writing notes**: delete any extracted figures that are NOT referenced by an `<img>` tag in the final notes. Keep only files that are actually embedded.
 
+#### Figure whitespace QA（必须做）
+
+Before finalizing the note, verify every embedded image is a real figure crop, not a mostly-blank canvas:
+
+- For each referenced PNG/JPG, check pixel dimensions and near-white bounding box. If non-white content uses <70% of image height or width, re-crop/trim the file before saving the note.
+- Use a small padding crop (roughly 20–30 px) around the detected non-white content; preserve labels/arrows and do not crop into axes or captions.
+- If an image becomes visually tiny in Obsidian despite `width="1000"`, suspect hidden whitespace inside the PNG/PDF crop first; fix the asset, not only the Markdown width.
+- Re-open or preview the final embedded figures after trimming. Dimensions alone are not sufficient because PDF page crops often look valid but contain large blank margins.
+
+Helper command:
+```bash
+python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py <notes_image_dir> --trim
+```
+Use `--trim-pad <px>` if labels are close to the edge.
+
 **For non-arxiv papers (fallback)**: crop individual figures from PDF pages:
 
 ```bash
 # Crop individual figures (PREFERRED for non-arxiv)
-python3 $SKILL_ROOT/scripts/extract_figures.py \
+python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py \
   --pdf <pdf_path> --crop <notes_image_dir> \
   --figures "fig1:4:72,48,540,370" "table1:4:100,490,520,610" "fig2:5:72,48,540,260"
 ```
@@ -252,11 +253,11 @@ Each `--figures` entry format: `name:page:x0,y0,x1,y1` (page is 1-indexed, coord
 
 ```bash
 # Full-page rendering (LAST RESORT only — avoid this)
-python3 $SKILL_ROOT/scripts/extract_figures.py \
+python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py \
   --pdf <pdf_path> <notes_image_dir> [page_numbers...]
 ```
 
-The output directory should be: `$VAULT_PATH/files/<Category>/<PaperTitle>/`
+The output directory should mirror the current multi-level note category: `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/files/<TopCategory>/<SubCategory>/<PaperTitle>/` (or the equivalent `~/OneDrive/paper_notes/files/<TopCategory>/<SubCategory>/<PaperTitle>/` runtime path).
 
 ### Step 3: Search for source code (MANDATORY)
 
@@ -284,17 +285,56 @@ The output directory should be: `$VAULT_PATH/files/<Category>/<PaperTitle>/`
 
 **Use the Obsidian CLI to create and manage notes.** This ensures proper vault integration (backlinks, tags, search indexing).
 
-**Vault name**: `$VAULT_NAME` (located at `$VAULT_PATH`)
+**Vault name**: `paper_notes` (current macOS path: `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/`; some runtimes may expose the same vault as `/Users/bytedance/OneDrive/paper_notes/`)
 
-#### 5a: Classify into category
+#### 5a: Classify into current multi-level category
 
-Query existing categories via Obsidian CLI:
+Always classify into the **actual current multi-level taxonomy**, not the historical flat folders. The taxonomy may change often, so first inspect the live vault categories:
 
 ```bash
-obsidian vault="$VAULT_NAME" folders folder="notes"
+obsidian vault="paper_notes" folders folder="notes"
+# If the CLI output is incomplete, inspect the filesystem too:
+find "/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/notes" -maxdepth 2 -type d | sort
 ```
 
-If no existing category fits, create a new folder. Known categories include: `RL for Visual Generation`, `Video Generation`, `World Model & Long Video Generation`, `Multi-Modal Generation`, `Visual Understanding`, `VLA`, `Diffusion Acceleration`, `RL for LLM & VLM`, `Agent Memory`.
+Current top-level taxonomy and expected subcategories:
+
+```text
+Agent
+├── Agentic Systems & Applications
+├── Memory
+├── Personalization
+└── RL
+LLM & VLM
+├── Pretraining & Architecture
+├── Long-Context & Streaming
+├── RL & Post-Training
+├── Evaluation & Analysis
+└── Theory
+Multimodal Generation
+├── Pretraining & Architecture
+├── Video & Audio-Video Generation
+├── Acceleration & Distillation
+├── RL & Alignment
+└── Reasoning & Test-Time Scaling
+World Model
+├── Long-Horizon Generation
+├── Real-Time & Streaming
+├── Interactive & Controllable
+└── 3D & Multi-View Simulation
+Physical AI
+├── VLA & World-Action Models
+├── Robot Data & Manipulation
+├── Physical Video Generation
+└── Embodied & Driving Simulation
+```
+
+Classification rules:
+
+- Choose exactly one `notes/<TopCategory>/<SubCategory>/` destination using the paper's main contribution, not just keywords in the title.
+- Prefer an existing subcategory when it fits. Create a new subcategory only when the paper is materially outside the live taxonomy; if you create one, also use the matching `files/<TopCategory>/<SubCategory>/<PaperTitle>/` asset path.
+- Do not repeat the parent name in the child label (e.g. use `Pretraining & Architecture`, not `VLM Pretraining & Architecture`).
+- Frontmatter `tags` must include one hierarchical category tag of the form `paper/<top-slug>/<sub-slug>` plus specific technical tags. Remove stale historical category tags such as `visual-understanding`, `rl-for-visual-generation`, `world-model-long-video-generation`, `multi-modal-generation`, `diffusion-acceleration`, `rl-for-llm-vlm`, and `agent-memory`.
 
 #### 5b: Create the note
 
@@ -304,36 +344,36 @@ Use `obsidian create` with the full note content. The note should use **Obsidian
 - Use `[[wikilinks]]` for cross-references to other papers in the vault
 
 ```bash
-obsidian vault="$VAULT_NAME" create \
+obsidian vault="paper_notes" create \
   name="<PaperTitle>" \
-  path="notes/<Category>/" \
+  path="notes/<TopCategory>/<SubCategory>/" \
   content="<note_content>" \
   silent
 ```
 
-**Note**: for long content that exceeds shell argument limits, use the `Write` tool to create the file directly at `$VAULT_PATH/notes/<Category>/<PaperTitle>.md`, then use Obsidian CLI to set properties.
+**Note**: for long content that exceeds shell argument limits, use the `Write` tool to create the file directly at `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/notes/<TopCategory>/<SubCategory>/<PaperTitle>.md`, then use Obsidian CLI to set properties.
 
 #### 5c: Set properties via Obsidian CLI
 
 After creating the note, set structured YAML frontmatter properties:
 
 ```bash
-obsidian vault="$VAULT_NAME" property:set name="authors" value="Name1, Name2" type=text file="<PaperTitle>"
-obsidian vault="$VAULT_NAME" property:set name="affiliations" value="Univ A, Company B" type=text file="<PaperTitle>"
-obsidian vault="$VAULT_NAME" property:set name="arxiv" value="XXXX.XXXXX" type=text file="<PaperTitle>"
-obsidian vault="$VAULT_NAME" property:set name="github" value="https://github.com/..." type=text file="<PaperTitle>"
-obsidian vault="$VAULT_NAME" property:set name="venue" value="NeurIPS 2025" type=text file="<PaperTitle>"
-obsidian vault="$VAULT_NAME" property:set name="year" value="2025" type=text file="<PaperTitle>"
-obsidian vault="$VAULT_NAME" property:set name="tags" value="S2V,benchmark,dataset" type=list file="<PaperTitle>"
-obsidian vault="$VAULT_NAME" property:set name="github_ref" value="main@abc12345" type=text file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="authors" value="Name1, Name2" type=text file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="affiliations" value="Univ A, Company B" type=text file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="arxiv" value="XXXX.XXXXX" type=text file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="github" value="https://github.com/..." type=text file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="venue" value="NeurIPS 2025" type=text file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="year" value="2025" type=text file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="tags" value="S2V,benchmark,dataset" type=list file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="github_ref" value="main@abc12345" type=text file="<PaperTitle>"
 
 # 若该论文已有对应的 paper-to-skill skill，追加此属性以便双向跳转
-obsidian vault="$VAULT_NAME" property:set name="paper_to_skill" value="<skill-name>" type=text file="<PaperTitle>"
+obsidian vault="paper_notes" property:set name="paper_to_skill" value="<skill-name>" type=text file="<PaperTitle>"
 ```
 
 `github_ref` 格式为 `<branch>@<short_sha>`，如 `main@abc12345`。若无开源代码则省略此属性。
 
-`paper_to_skill` 检测方式：扫描 `$SKILLS_DIR/*/sources.json`，若某个 skill 的 `papers[].id` 或 `papers[].url` 中的 arxiv_id 与当前论文（归一化后，strip `v<N>` / 前缀 `arxiv:`）匹配，则填入该 skill 的目录名。若未找到匹配 skill 则省略此属性。
+`paper_to_skill` 检测方式：扫描 `~/ai-skills/skills/*/sources.json`，若某个 skill 的 `papers[].id` 或 `papers[].url` 中的 arxiv_id 与当前论文（归一化后，strip `v<N>` / 前缀 `arxiv:`）匹配，则填入该 skill 的目录名。若未找到匹配 skill 则省略此属性。
 
 伪代码：
 ```python
@@ -356,7 +396,7 @@ def to_arxiv(s):
 
 target_arxiv = to_arxiv(this_paper_arxiv)
 paper_to_skill_value = None
-for sd in glob.glob(os.path.expanduser("$SKILLS_DIR/*/")):
+for sd in glob.glob(os.path.expanduser("~/ai-skills/skills/*/")):
     src_path = os.path.join(sd, "sources.json")
     if not os.path.isfile(src_path):
         continue
@@ -372,11 +412,20 @@ for sd in glob.glob(os.path.expanduser("$SKILLS_DIR/*/")):
 
 #### 5d: Figure embedding
 
-Figures are stored in `$VAULT_PATH/files/<Category>/<PaperTitle>/`.
+Figures are stored in `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/files/<TopCategory>/<SubCategory>/<PaperTitle>/`, mirroring the note category.
 
 In note content, reference figures using relative paths from the note file:
-- `<img src="../../files/<Category>/<PaperTitle>/fig_name.png" alt="Figure X" width="1000">`
+- `<img src="../../../files/<TopCategory>/<SubCategory>/<PaperTitle>/fig_name.png" alt="Figure X" width="1000">`
 - Or use Obsidian embeds if the files directory is within vault: `![[fig_name.png|1000]]`
+
+**Wide table hygiene**: do not put long code paths and long hyperparameter lists into one Markdown table row. Obsidian will force awkward column widths and make key values appear as a narrow unreadable strip. For training configs or code mappings with long values, prefer short sections / definition lists:
+```
+#### RAVEN DMD
+- **Config path**: `configs/.../raven.jsonc`
+- **Sampling / shape**: `training_steps=220`, ...
+- **Optimizer**: backbone LR `2e-6`, ...
+```
+Use tables only when every cell is short enough to wrap cleanly.
 
 **CRITICAL (P8)**: always leave a **blank line** between `<img>` and the "Figure N 解读" text. Without the blank line, Markdown treats the text as part of an HTML block and `$...$` inline math won't render:
 ```
@@ -386,14 +435,14 @@ Figure 3 解读：由 $K$ 个 reward models 打分…
 ```
 
 For grouped subfigures (`Figure 3a/3b/3c`, `(a)/(b)/(c)` under one caption), embed **one composite image**:
-- `<img src="../../files/<Category>/<PaperTitle>/fig3_group.svg" alt="Figure 3a–3c" width="1000">`
+- `<img src="../../../files/<TopCategory>/<SubCategory>/<PaperTitle>/fig3_group.svg" alt="Figure 3a–3c" width="1000">`
 - Follow with `Figure 3a–3c 解读：...` (after a blank line)
 - Never place each subpanel as a separate `width="1000"` image unless the original paper shows them as separate figures.
 
 #### 5e: Verify note creation
 
 ```bash
-obsidian vault="$VAULT_NAME" read file="<PaperTitle>"
+obsidian vault="paper_notes" read file="<PaperTitle>"
 ```
 
 **Content checklist**:
@@ -401,7 +450,7 @@ obsidian vault="$VAULT_NAME" read file="<PaperTitle>"
 - **Code mapping table**: `| Paper Concept | Source File | Key Class/Function |` (§section-level granularity; line numbers are `paper-to-skill`'s job)
 - **Code reference header**: `> **Code reference**: \`branch\` @ \`short_sha\` (date)` appears before the mapping table
 - **`github_ref` property**: set via Obsidian CLI (format: `branch@short_sha`)
-- **`paper_to_skill` property**: set if matching skill found in `$SKILLS_DIR`
+- **`paper_to_skill` property**: set if matching skill found in `~/ai-skills/skills/`
 - **Idea section core insight**: 1–3 sentences stating what's fundamentally new (per P6)
 - **Method section intuition paragraph**: at least one prose paragraph explaining *why* it works, not just formulas/code (per P6)
 - All 5 sections with substantive content (each with per-section checklist, see "Note Format" above)
@@ -410,14 +459,16 @@ obsidian vault="$VAULT_NAME" read file="<PaperTitle>"
 ```
 paper_notes/
 ├── notes/
-│   └── <Category>/
-│       └── <PaperTitle>.md          ← reading notes
+│   └── <TopCategory>/
+│       └── <SubCategory>/
+│           └── <PaperTitle>.md          ← reading notes
 └── files/
-    └── <Category>/
-        └── <PaperTitle>/            ← extracted figures (PNG/SVG)
+    └── <TopCategory>/
+        └── <SubCategory>/
+            └── <PaperTitle>/            ← extracted figures (PNG/SVG)
 ```
 
-**Notify the user**: print the category chosen and the full file path after saving.
+**Notify the user**: print the top category, subcategory, hierarchical category tag, and the full file path after saving.
 
 ### Step 7: Budgeted parallel review and fix (MANDATORY)
 
@@ -523,6 +574,22 @@ These are real bugs found in past notes. Check every note against this list.
   Figure 3 解读：分别由 $K$ 个 reward models 打分…
   ```
 - **Check**: after writing notes, verify no `<img ...>` line is immediately followed by text on the next line without a blank line separator
+
+### P9: Large blank margins inside extracted figures
+- **Bug**: a PNG/PDF crop contains the target figure plus huge white margins, so Obsidian shows a small diagram with a large blank area below/around it.
+- **Effect**: figures look tiny or leave large vertical gaps even when the Markdown `width` is correct.
+- **Rule**: after extraction, run a visual or automated whitespace check for every embedded bitmap. If the content bounding box is much smaller than the canvas, trim the asset itself and keep a small padding.
+- **How**:
+  1. Detect near-white margins with PIL/ImageMagick or manually preview the image.
+  2. Crop to the content bounding box plus 20–30 px padding.
+  3. Re-open the cropped image and verify labels/arrows are intact.
+- **Check**: any embedded image whose non-white content occupies <70% of image height or width must be inspected and usually re-cropped.
+
+### P10: Wide Markdown tables for training configs
+- **Bug**: putting `Stage | Config path | Key values` into one row with long code paths and dozens of hyperparameters.
+- **Effect**: Obsidian squeezes one column into a narrow strip, wraps every token vertically, and makes the table unreadable.
+- **Rule**: for long configs, use subsections or definition lists instead of wide Markdown tables. Keep the exact config path, but split key values into semantic bullets such as Sampling, Trajectory/Loss, Optimizer, Reward weights.
+- **Check**: if a table row contains a path or key-value cell longer than ~120 characters, convert it before saving.
 
 ### P6: Over-codification — note becomes code dump, not reading notes
 - **Bug**: Method section becomes a pile of pseudocode blocks with no intuition paragraph; Idea section just says "本文提出了XXX方法" without explaining what's fundamentally new
