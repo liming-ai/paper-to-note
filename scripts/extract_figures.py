@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Extract figures from academic paper PDFs.
+"""Extract figures from academic papers.
 
 Supports two modes:
-1. arxiv source mode: download source tarball, extract original figure files
+1. arxiv source mode: download LaTeX source, extract original figure files
 2. PDF rendering mode: render specific pages as PNG (fallback)
 3. compose mode: combine related subfigures into one SVG group
 
@@ -10,8 +10,8 @@ Usage:
     # arxiv source mode (preferred)
     python extract_figures.py --arxiv <arxiv_id> <output_dir>
 
-    # PDF page rendering mode (fallback)
-    python extract_figures.py --pdf <pdf_path> <output_dir> [page_numbers...]
+    # PDF page rendering mode (last-resort fallback)
+    python extract_figures.py --pdf <pdf_path> <output_dir> --pages 3 5
 
     # grouped subfigures, preserving the paper's row/grid layout
     python extract_figures.py <output_dir> --compose "fig3_group:row:a.svg,b.svg,c.svg"
@@ -27,13 +27,17 @@ import shutil
 import tarfile
 import tempfile
 import argparse
+import gzip
 from xml.sax.saxutils import escape
 
-MAX_WIDTH = 1200  # max image width in pixels
+MAX_WIDTH = 1200  # max image width in pixels for PDF fallback modes
+SOURCE_PDF_DPI = 600  # high-DPI fallback when source vector conversion is unavailable
 
 
 def resize_image(path: str, max_width: int = MAX_WIDTH):
     """Resize image to max_width if wider, using Pillow LANCZOS."""
+    if not max_width or max_width <= 0:
+        return
     try:
         from PIL import Image
         img = Image.open(path)
@@ -44,6 +48,142 @@ def resize_image(path: str, max_width: int = MAX_WIDTH):
             img.save(path, optimize=True)
     except ImportError:
         pass  # Pillow not available, skip resize
+
+
+def _sanitize_filename(name: str) -> str:
+    """Return a filesystem-safe filename stem while keeping it recognizable."""
+    name = re.sub(r"[\\/]+", "_", name)
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+    return name.strip("._-") or "figure"
+
+
+def _unique_output_name(preferred_stem: str, ext: str, used_names: set[str]) -> str:
+    """Avoid overwriting different source figures that share the same basename."""
+    stem = _sanitize_filename(preferred_stem)
+    ext = ext.lower()
+    candidate = f"{stem}{ext}"
+    i = 2
+    while candidate in used_names:
+        candidate = f"{stem}_{i}{ext}"
+        i += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _unpack_arxiv_source(source_path: str, tmpdir: str) -> str | None:
+    """Unpack an arXiv e-print payload.
+
+    Most arXiv sources are tarballs, but some older e-prints are a single
+    gzipped TeX file. Handling both keeps arXiv notes source-first instead of
+    silently falling back to blurry PDF page crops.
+    """
+    source_dir = os.path.join(tmpdir, "source")
+    os.makedirs(source_dir, exist_ok=True)
+
+    try:
+        with tarfile.open(source_path) as tar:
+            try:
+                tar.extractall(source_dir, filter="data")
+            except TypeError:
+                tar.extractall(source_dir)
+        return source_dir
+    except tarfile.TarError:
+        pass
+
+    raw = None
+    try:
+        with gzip.open(source_path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        try:
+            with open(source_path, "rb") as f:
+                raw = f.read()
+        except OSError:
+            raw = None
+
+    if not raw:
+        return None
+    if raw.lstrip().lower().startswith((b"<html", b"<!doctype html")):
+        return None
+
+    with open(os.path.join(source_dir, "source.tex"), "wb") as f:
+        f.write(raw)
+    return source_dir
+
+
+def _copy_or_convert_pdf_figure(
+    src_path: str,
+    output_dir: str,
+    base: str,
+    used_names: set[str],
+    has_pdf2svg: bool,
+    has_pymupdf: bool,
+    dpi: int = SOURCE_PDF_DPI,
+) -> tuple[str, str] | None:
+    """Convert a source figure PDF to SVG when possible, otherwise high-DPI PNG."""
+    if has_pdf2svg:
+        dst_name = _unique_output_name(base, ".svg", used_names)
+        dst_path = os.path.join(output_dir, dst_name)
+        result = subprocess.run(["pdf2svg", src_path, dst_path], capture_output=True)
+        svg_size = os.path.getsize(dst_path) if os.path.exists(dst_path) else 0
+        if result.returncode == 0 and svg_size > 0:
+            return dst_name, dst_path
+        if os.path.exists(dst_path):
+            os.remove(dst_path)
+        used_names.discard(dst_name)
+
+    if not has_pymupdf:
+        return None
+
+    import pymupdf
+
+    dst_name = _unique_output_name(base, ".png", used_names)
+    dst_path = os.path.join(output_dir, dst_name)
+    doc = pymupdf.open(src_path)
+    page = doc[0]
+    zoom = dpi / 72
+    mat = pymupdf.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=mat)
+    pix.save(dst_path)
+    doc.close()
+    return dst_name, dst_path
+
+
+def _convert_eps_figure(
+    src_path: str,
+    output_dir: str,
+    base: str,
+    used_names: set[str],
+    has_pdf2svg: bool,
+    has_pymupdf: bool,
+    dpi: int = SOURCE_PDF_DPI,
+) -> tuple[str, str] | None:
+    """Convert a source EPS figure without falling back to full-paper crops."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pdf_path = os.path.join(tmp, f"{_sanitize_filename(base)}.pdf")
+        if shutil.which("epstopdf"):
+            result = subprocess.run(["epstopdf", src_path, f"--outfile={pdf_path}"], capture_output=True)
+            if result.returncode == 0 and os.path.exists(pdf_path):
+                return _copy_or_convert_pdf_figure(
+                    pdf_path, output_dir, base, used_names, has_pdf2svg, has_pymupdf, dpi=dpi
+                )
+
+        magick = shutil.which("magick") or shutil.which("convert")
+        if magick:
+            dst_name = _unique_output_name(base, ".png", used_names)
+            dst_path = os.path.join(output_dir, dst_name)
+            cmd = [magick]
+            if os.path.basename(magick) == "magick":
+                cmd += ["convert"]
+            cmd += ["-density", str(dpi), src_path, "-background", "white", "-alpha", "remove", dst_path]
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode == 0 and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0:
+                return dst_name, dst_path
+            if os.path.exists(dst_path):
+                os.remove(dst_path)
+            used_names.discard(dst_name)
+
+    return None
 
 
 def trim_whitespace(path: str, threshold: int = 245, pad: int = 24) -> bool:
@@ -104,39 +244,48 @@ def trim_output_dir_images(output_dir: str, threshold: int = 245, pad: int = 24)
     return count
 
 
-def extract_from_arxiv_source(arxiv_id: str, output_dir: str):
-    """Download arxiv source tarball and extract original figure files."""
+def extract_from_arxiv_source(
+    arxiv_id: str,
+    output_dir: str,
+    source_dpi: int = SOURCE_PDF_DPI,
+    resize_source: bool = False,
+    max_width: int = MAX_WIDTH,
+):
+    """Download arXiv LaTeX source and extract original figure files.
+
+    Source mode intentionally preserves original raster dimensions and prefers
+    vector SVG for source PDFs. PDF-page crops are a separate fallback mode and
+    are never used implicitly here.
+    """
     os.makedirs(output_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        tarball = os.path.join(tmpdir, "source.tar.gz")
+        source_payload = os.path.join(tmpdir, "source.eprint")
 
         # Download source
         url = f"https://arxiv.org/e-print/{arxiv_id}"
         result = subprocess.run(
-            ["curl", "-sL", "-o", tarball, url],
+            [
+                "curl", "-fL", "--retry", "3", "--connect-timeout", "20",
+                "--max-time", "180", "-A", "paper-to-note/1.0",
+                "-o", source_payload, url,
+            ],
             capture_output=True, text=True
         )
-        if result.returncode != 0:
-            print(f"ERROR: Failed to download {url}")
+        if result.returncode != 0 or not os.path.exists(source_payload) or os.path.getsize(source_payload) < 100:
+            stderr = result.stderr.strip()
+            print(f"ERROR: Failed to download arXiv source {url}" + (f": {stderr}" if stderr else ""))
             return []
 
-        # Extract tarball
-        try:
-            with tarfile.open(tarball) as tar:
-                tar.extractall(tmpdir, filter="data")
-        except Exception:
-            try:
-                subprocess.run(["tar", "xf", tarball, "-C", tmpdir],
-                               capture_output=True)
-            except Exception as e:
-                print(f"ERROR: Failed to extract tarball: {e}")
-                return []
+        source_dir = _unpack_arxiv_source(source_payload, tmpdir)
+        if not source_dir:
+            print(f"ERROR: Downloaded arXiv source payload could not be unpacked: {url}")
+            return []
 
         # Find image files
         image_exts = {".png", ".jpg", ".jpeg", ".pdf", ".eps", ".svg"}
         figures = []
-        for root, dirs, files in os.walk(tmpdir):
+        for root, dirs, files in os.walk(source_dir):
             for f in sorted(files):
                 ext = os.path.splitext(f)[1].lower()
                 if ext in image_exts:
@@ -144,7 +293,7 @@ def extract_from_arxiv_source(arxiv_id: str, output_dir: str):
                     # Skip tiny files (icons, logos)
                     if os.path.getsize(src_path) < 5000:
                         continue
-                    figures.append((src_path, f))
+                    figures.append((src_path, os.path.relpath(src_path, source_dir)))
 
         # Convert and copy to output
         results = []
@@ -155,53 +304,50 @@ def extract_from_arxiv_source(arxiv_id: str, output_dir: str):
             has_pymupdf = False
 
         has_pdf2svg = shutil.which("pdf2svg") is not None
+        used_names: set[str] = set()
 
-        for src_path, original_name in figures:
-            base = os.path.splitext(original_name)[0]
-            ext = os.path.splitext(original_name)[1].lower()
+        print(f"Extracting original figures from arXiv LaTeX source for {arxiv_id}")
+        for src_path, rel_name in figures:
+            base = os.path.splitext(rel_name)[0]
+            ext = os.path.splitext(rel_name)[1].lower()
 
             if ext in (".png", ".jpg", ".jpeg"):
-                dst_name = f"{base}.png"
+                # Preserve the original source raster bytes by default. Do not
+                # downsample high-resolution arXiv assets unless explicitly
+                # requested with --resize-source.
+                dst_name = _unique_output_name(base, ext, used_names)
                 dst_path = os.path.join(output_dir, dst_name)
                 shutil.copy2(src_path, dst_path)
-                resize_image(dst_path)
+                if resize_source:
+                    resize_image(dst_path, max_width=max_width)
+            elif ext == ".svg":
+                dst_name = _unique_output_name(base, ".svg", used_names)
+                dst_path = os.path.join(output_dir, dst_name)
+                shutil.copy2(src_path, dst_path)
             elif ext == ".pdf":
-                # Try SVG first (vector, lossless zoom)
-                if has_pdf2svg:
-                    svg_path = os.path.join(output_dir, f"{base}.svg")
-                    subprocess.run(["pdf2svg", src_path, svg_path],
-                                   capture_output=True)
-                    svg_size = os.path.getsize(svg_path) if os.path.exists(svg_path) else 0
-                    if svg_size > 2 * 1024 * 1024:  # > 2MB = has embedded rasters
-                        os.remove(svg_path)  # SVG too large, fall through to PNG
-                    else:
-                        dst_name = f"{base}.svg"
-                        dst_path = svg_path
-                        # skip resize for SVG
-                        size_kb = svg_size // 1024
-                        results.append({"filename": dst_name, "size_kb": size_kb})
-                        print(f"  {dst_name}: {size_kb}KB (vector)")
-                        continue
-
-                # Fallback: render PDF → PNG
-                if has_pymupdf:
-                    dst_name = f"{base}.png"
-                    dst_path = os.path.join(output_dir, dst_name)
-                    doc = pymupdf.open(src_path)
-                    page = doc[0]
-                    zoom = 300 / 72
-                    mat = pymupdf.Matrix(zoom, zoom)
-                    pix = page.get_pixmap(matrix=mat)
-                    pix.save(dst_path)
-                    doc.close()
-                    resize_image(dst_path)
-                else:
+                converted = _copy_or_convert_pdf_figure(
+                    src_path, output_dir, base, used_names, has_pdf2svg, has_pymupdf, dpi=source_dpi
+                )
+                if not converted:
                     continue
+                dst_name, dst_path = converted
+            elif ext == ".eps":
+                converted = _convert_eps_figure(
+                    src_path, output_dir, base, used_names, has_pdf2svg, has_pymupdf, dpi=source_dpi
+                )
+                if not converted:
+                    continue
+                dst_name, dst_path = converted
             else:
                 continue
             size_kb = os.path.getsize(dst_path) // 1024
             results.append({"filename": dst_name, "size_kb": size_kb})
-            print(f"  {dst_name}: {size_kb}KB")
+            marker = "source"
+            if ext == ".pdf" and dst_name.endswith(".svg"):
+                marker = "source vector"
+            elif ext in (".pdf", ".eps"):
+                marker = f"source high-DPI {source_dpi}"
+            print(f"  {dst_name}: {size_kb}KB ({marker})")
 
         print(f"\nExtracted {len(results)} figures to {output_dir}")
         return results
@@ -462,10 +608,22 @@ if __name__ == "__main__":
                         help="Near-white threshold for --trim (default: 245)")
     parser.add_argument("--trim-pad", type=int, default=24,
                         help="Padding in pixels kept around detected content for --trim (default: 24)")
+    parser.add_argument("--source-dpi", type=int, default=SOURCE_PDF_DPI,
+                        help=f"DPI for arXiv source PDF/EPS fallback rasterization (default: {SOURCE_PDF_DPI})")
+    parser.add_argument("--resize-source", action="store_true",
+                        help="Downscale arXiv source raster images to --max-width (off by default; preserves source quality)")
+    parser.add_argument("--max-width", type=int, default=MAX_WIDTH,
+                        help=f"Max width for PDF fallback rendering and optional --resize-source (default: {MAX_WIDTH}; use 0 to disable)")
     args = parser.parse_args()
 
     if args.arxiv:
-        extract_from_arxiv_source(args.arxiv, args.output_dir)
+        extract_from_arxiv_source(
+            args.arxiv,
+            args.output_dir,
+            source_dpi=args.source_dpi,
+            resize_source=args.resize_source,
+            max_width=args.max_width,
+        )
     elif args.pdf and args.crop:
         if not args.figures:
             print("ERROR: --crop requires --figures specs")

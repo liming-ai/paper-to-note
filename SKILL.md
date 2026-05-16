@@ -29,7 +29,7 @@ Generate high-quality structured reading notes for academic papers.
 - `~/.claude/skills/_shared/commit-anchor.md` — commit SHA 锚点格式（Pitfall P5 引用）
 - `~/.claude/skills/_shared/pseudocode-rules.md` — 伪代码质量规则
 - `~/.claude/skills/_shared/known-categories.md` — Obsidian 分类
-- `~/.claude/skills/_shared/extract_figures.py` — 图像提取（paper-to-note/scripts/extract_figures.py 是其软链）
+- `paper-to-note/scripts/extract_figures.py` — canonical 图像提取工具；arXiv source-first，保留原始 source raster/vector 质量。若 runtime 还有旧的 `$SHARED/extract_figures.py` 镜像，必须确认它与本脚本一致后再用。
 
 ### Runtime Path Fallback（跨 runtime 路径约定）
 
@@ -197,20 +197,24 @@ Output strictly in these 5 sections, each with substantive content:
 
 ### Step 2: Extract original figures
 
-**For arxiv papers (preferred)**: download source tarball to get original high-res figure files:
+**Source-first rule for arXiv papers（默认路径）**: if the paper has an arXiv ID, you MUST extract figures from the arXiv LaTeX source before considering any PDF crop. The PDF is for reading/verification; it is **not** the default figure source. Do not create cropped PDF screenshots for arXiv papers unless source extraction returns no usable figure for a specific required figure/table, and record that exception in the working notes.
+
+**For arxiv papers (default)**: download source tarball/e-print to get original high-res figure files:
 
 ```bash
 python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py \
   --arxiv <arxiv_id> <notes_image_dir>
 ```
 
-This downloads the LaTeX source, extracts all figure files (PNG/JPG/PDF→PNG), and filters out small icons.
+This downloads the LaTeX source, extracts original figure files (PNG/JPG/SVG/PDF/EPS), preserves source raster dimensions by default, converts source PDFs to SVG when possible, and only uses high-DPI PNG conversion when vector conversion is unavailable. This avoids the blur introduced by PDF-page crops or downsampled screenshots.
+
+If source extraction returns too few figures, first inspect the arXiv source tree / `.tex` `\includegraphics` paths to find missing assets. Use PDF cropping only as a documented fallback for assets that are not present in the source package (for example, a publisher-only table image).
 
 #### Preserve grouped subfigures from LaTeX source
 
 When the arXiv source places multiple panels under one `figure` caption (e.g. `subfigure`, `subcaptionbox`, `minipage`, `tabular`, or repeated `\includegraphics` with `(a)/(b)/(c)` labels), **preserve that grouped layout in the note**.
 
-- Inspect the relevant `.tex` figure environment whenever extracted filenames look like panels (`fig3a`, `breakdown`, `quant_proxy`) or the caption/text references `Figure 3a/3b/3c`.
+- Inspect the relevant `.tex` figure environment whenever extracted filenames look like panels (`fig3a`, `breakdown`, `quant_proxy`) or the caption/text references `Figure 3a/3b/3c`; the source `.tex` is the authority for grouping/layout.
 - Preferred output: create one composite file named like `fig3_group.svg` / `fig3_abc.svg` matching the source/PDF layout, then embed it once at normal width.
 - Use the helper after extraction when panels are separate files:
   ```bash
@@ -221,7 +225,7 @@ When the arXiv source places multiple panels under one `figure` caption (e.g. `s
 - Write one combined paragraph such as `Figure 3a–3c 解读：...`, explaining each panel inside the paragraph. **Do not embed grouped panels as three separate full-width images.**
 - Only embed individual subpanels separately if the paper treats them as standalone figures; cap each at `width="320"`–`width="450"` or place them side-by-side.
 
-**After writing notes**: delete any extracted figures that are NOT referenced by an `<img>` tag in the final notes. Keep only files that are actually embedded.
+**After writing notes**: delete any extracted figures that are NOT referenced by an `<img>` tag or Obsidian image embed in the final notes. Keep only files that are actually embedded.
 
 #### Figure whitespace QA（必须做）
 
@@ -238,7 +242,7 @@ python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py <notes_image_d
 ```
 Use `--trim-pad <px>` if labels are close to the edge.
 
-**For non-arxiv papers (fallback)**: crop individual figures from PDF pages:
+**For non-arxiv papers, or documented arXiv-source misses only (fallback)**: crop individual figures from PDF pages:
 
 ```bash
 # Crop individual figures (PREFERRED for non-arxiv)
@@ -254,7 +258,7 @@ Each `--figures` entry format: `name:page:x0,y0,x1,y1` (page is 1-indexed, coord
 ```bash
 # Full-page rendering (LAST RESORT only — avoid this)
 python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py \
-  --pdf <pdf_path> <notes_image_dir> [page_numbers...]
+  --pdf <pdf_path> <notes_image_dir> --pages <page_numbers...>
 ```
 
 The output directory should mirror the current multi-level note category: `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/files/<TopCategory>/<SubCategory>/<PaperTitle>/` (or the equivalent `~/OneDrive/paper_notes/files/<TopCategory>/<SubCategory>/<PaperTitle>/` runtime path).
@@ -510,14 +514,14 @@ These are real bugs found in past notes. Check every note against this list.
 
 ### P2: Full-page PDF screenshots instead of individual figures
 - **Bug**: embedding `page_5.png` (a full PDF page) instead of cropping out just `fig2_overview.png`
-- **Effect**: figures show irrelevant surrounding text, look unprofessional, waste space
-- **Rule**: ALWAYS extract individual figures, tables, and algorithms — never embed full pages
+- **Effect**: figures show irrelevant surrounding text, look unprofessional, waste space, and are often blurry compared with arXiv source assets
+- **Rule**: For arXiv papers, ALWAYS run source extraction first and embed original source figures; for non-arXiv papers, extract individual figures/tables/algorithms — never embed full pages
 - **How**:
-  1. For arxiv papers: use `--arxiv` mode which extracts original figure files (preferred)
-  2. For non-arxiv papers: use `--pdf --crop` mode to crop individual figures from PDF pages
+  1. For arxiv papers: use `--arxiv` mode as the default path; it extracts original LaTeX-source figures, preserves source raster dimensions, and prefers vector SVG for source PDFs
+  2. Only if a required arXiv figure is missing from the source package, document the miss and use `--pdf --crop` for that specific asset
   3. After extraction, verify each image contains ONLY the figure/table, not surrounding text
   4. Name files descriptively: `fig2_overview.png`, `table1_comparison.png`, `algo1_training.png` — NOT `page_5.png`
-- **Cleanup**: after writing notes, delete any extracted images that are NOT referenced by `<img>` tags
+- **Cleanup**: after writing notes, delete any extracted images that are NOT referenced by `<img>` tags or Obsidian image embeds
 
 ### P3: Missing figures — not all paper figures embedded
 - **Bug**: only embedding a few "main" figures while skipping Tables, Algorithms, qualitative comparisons

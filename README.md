@@ -7,7 +7,7 @@ An AI agent skill that generates high-quality, structured reading notes for acad
 Given a paper (PDF, arXiv link, or title), the skill instructs an AI agent to:
 
 1. **Download and read** the full paper
-2. **Extract figures** from arXiv source or PDF (with automatic SVG/PNG conversion)
+2. **Extract figures** from arXiv LaTeX source by default (PDF crops only as fallback, with automatic SVG/PNG conversion)
 3. **Search for source code** on GitHub (mandatory — never assumes code is unavailable)
 4. **Generate structured Chinese notes** with 5 sections: Motivation, Idea, Method, Experimental Setup, Results
 5. **Write Python/PyTorch pseudocode** based on actual source code (not paper abstractions)
@@ -19,7 +19,7 @@ Given a paper (PDF, arXiv link, or title), the skill instructs an AI agent to:
 - All math formulas in LaTeX
 - Pseudocode reflects real implementation (verified against source code)
 - Code-to-paper mapping table with commit SHA anchoring
-- Figures extracted as individual images (not full-page screenshots)
+- Figures extracted as original arXiv source assets when available (not blurry full-page screenshots)
 - Parallel 3-reviewer quality check catches factual errors and structural gaps
 
 ## Installation
@@ -60,9 +60,12 @@ brew install yakitrak/yakitrak/obsidian  # macOS
 brew install gh  # macOS
 # apt install gh  # Linux
 
-# Optional: PDF→SVG vector conversion (higher quality figures)
+# Optional: source PDF/EPS→SVG vector conversion (higher quality figures)
 brew install pdf2svg  # macOS
 # apt install pdf2svg  # Linux
+
+# Optional: EPS source figure conversion fallback
+brew install ghostscript imagemagick
 ```
 
 ### Configuration (IMPORTANT)
