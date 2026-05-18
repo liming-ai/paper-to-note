@@ -80,6 +80,7 @@ Unless the user explicitly asks for a short summary, **write the note as a detai
 - **Explain, do not only transcribe**: after formulas, figures, algorithms, and tables, add human-readable interpretation: what each symbol/component means, why the design is needed, what failure mode it addresses, and how it differs from prior work.
 - **Appendix is in scope**: if appendix/supplement includes training details, extra ablations, prompt lists, implementation choices, or failure cases that materially affect understanding or reproduction, incorporate them into §3–§5 instead of ignoring them.
 - **Minimum length**: unless the user explicitly asks for a short summary, the final saved note MUST contain at least **350 Markdown lines**. If the note is shorter, expand with substantive method details, experiment evidence, appendix material, code-to-paper interpretation, figure/table explanations, and limitations; never pad with repetitive filler.
+- **Depth priority**: allocate the most detail to **§1 Motivation, §2 Idea, and especially §3 Method**. These three sections should carry the main paper understanding: why the problem matters, what the core insight is, and how the method actually works. Only after these are clear and detailed should §4 Experimental Setup and §5 Experimental Results be summarized with exact evidence.
 
 ### 0. Mandatory Skeleton（每篇笔记的格式硬底线）
 
@@ -108,7 +109,7 @@ These are **non-negotiable structural items**. A note missing any of them will b
 
 ### 1–5: Required Section Content
 
-Output strictly in these 5 sections, each with substantive content. **Default to maximum useful detail**: do not compress a multi-page method/experiment section into a few bullets unless the user explicitly asks for a brief note.
+Output strictly in these 5 sections, each with substantive content. **Default to maximum useful detail**: do not compress a multi-page method/experiment section into a few bullets unless the user explicitly asks for a brief note. The note's explanatory center of gravity should be **Motivation → Idea → Method**; experiments and results are still required, but they support the reader's understanding rather than replacing method explanation.
 
 ---
 
@@ -519,6 +520,7 @@ This step is non-negotiable for quality, but repeated full-context review is for
 - **If information is missing**: state "论文未详细说明" — never fabricate
 - **Result numbers must be exact**: read directly from paper tables
 - **Method section must be thorough**: this is where readers get the most value
+- **Depth priority**: make Motivation, Idea, and Method detailed and clear first; then cover Experimental Setup and Results with exact but more compact evidence
 - **Notes should be as detailed as possible by default**: include all major method details, experiment settings, ablation findings, qualitative observations, and appendix details that affect understanding; only shorten when the user explicitly asks for brevity
 - **Minimum note length**: final saved notes must be ≥350 Markdown lines by default; expand with evidence-backed technical content if shorter
 - **Detailed does not mean padded**: every added paragraph should explain a concrete mechanism, evidence item, design trade-off, limitation, or reproducibility detail from the paper/code
