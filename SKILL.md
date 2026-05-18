@@ -47,15 +47,16 @@ Generate high-quality structured reading notes for academic papers.
 
 The most common failure mode is re-counting the same long context across many turns and agents. Treat context as a budgeted artifact, not a transcript.
 
-- **Default to path-based handoff**: write intermediate paper text, figure inventory, code notes, and review findings to files; pass only paths plus a short objective in prompts.
+- **Default to path-based handoff**: write intermediate paper text, figure inventory, code notes, and review findings to files in an external scratch directory outside the Obsidian vault; pass only paths plus a short objective in prompts.
 - **Do not paste full artifacts into prompts**: pass file paths for the PDF, note `.md`, image directory, repo checkout, and source files. Only paste small excerpts needed for the current decision.
-- **Create a compact work packet** before review: write a short `review_packet.md` next to the note or in `/tmp` containing only paper metadata, note path, image dir, code repo/ref, figure inventory, unresolved risks, and changed sections since the last review. Keep it under ~120 lines by default and never exceed ~200 lines.
+- **Create a compact work packet outside the vault** before review: write a short `review_packet.md` under `$PAPER_TO_NOTE_WORKDIR/<paper-slug>/` if set, otherwise `${TMPDIR:-/tmp}/paper-to-note/<paper-slug>/`. It should contain only paper metadata, note path, image dir, code repo/ref, figure inventory, unresolved risks, and changed sections since the last review. Keep it under ~120 lines by default and never exceed ~200 lines.
+- **Never pollute the Obsidian vault with scratch artifacts**: do not create `review_packet.md`, `tmp/`, `_tmp/`, `_work/`, extracted paper text, reviewer notes, or cloned repos anywhere under `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/` (or the equivalent `~/OneDrive/paper_notes/`). The vault may contain only the final note under `notes/` and final referenced assets under `files/`.
 - **Read selectively**: when revisiting the paper/note/source, use section-level reads, grep headers, or table/figure inventories instead of reloading the full paper, full note, full source tree, or prior chat.
 - **Bound multi-agent usage**: multi-agent review is allowed, but use the rule-based set below (do NOT let the agent self-judge "low risk" to skip Source Code Reviewer):
   - **Always run** Format Reviewer + Content Reviewer.
   - **Source Code Reviewer is MANDATORY** whenever the paper has a public GitHub repo (i.e. `github_ref` will be set). The only valid skip condition is: the note explicitly states `代码搜索未找到开源实现` after a documented search.
   - Never spawn a coordinator that then spawns another 3 reviewers unless the runtime has no direct parallel-agent support. Never pass the full conversation or full paper to reviewers.
-- **No full-context subagent forks**: when the runtime supports agent context controls, start reviewers without inheriting the whole chat history. Give them only `$REVIEWER`, `review_packet.md`, and concrete file paths.
+- **No full-context subagent forks**: when the runtime supports agent context controls, start reviewers without inheriting the whole chat history. Give them only `$REVIEWER`, the external `review_packet.md` path, and concrete file paths.
 - **Keep reviewer prompts small**: reviewer prompt should be ≤ ~1,200 words and must not inline the whole skill, note, paper, transcript, or source code. Reference instruction files by path.
 - **Targeted re-review only**: after fixing issues, re-run only the reviewer scope affected by the fix. Do not repeat all reviewers with the complete long context unless the note was substantially rewritten.
 - **No git-worktree review in paper/vault dirs**: do not use Codex/worktree-isolated review when the current directory is a paper folder, Obsidian vault, or any git repository without a valid `HEAD` (`git rev-parse --verify HEAD` fails). In that case, review in-place with read-only file access and do not try to resolve base branch `HEAD`.
@@ -78,6 +79,7 @@ Unless the user explicitly asks for a short summary, **write the note as a detai
 - **Specificity over generic prose**: name the actual modules, datasets, baselines, reward models, losses, schedules, hyperparameters, and measured numbers. Do not write generic phrases like "提升效果明显" without the exact table/figure evidence.
 - **Explain, do not only transcribe**: after formulas, figures, algorithms, and tables, add human-readable interpretation: what each symbol/component means, why the design is needed, what failure mode it addresses, and how it differs from prior work.
 - **Appendix is in scope**: if appendix/supplement includes training details, extra ablations, prompt lists, implementation choices, or failure cases that materially affect understanding or reproduction, incorporate them into §3–§5 instead of ignoring them.
+- **Minimum length**: unless the user explicitly asks for a short summary, the final saved note MUST contain at least **350 Markdown lines**. If the note is shorter, expand with substantive method details, experiment evidence, appendix material, code-to-paper interpretation, figure/table explanations, and limitations; never pad with repetitive filler.
 
 ### 0. Mandatory Skeleton（每篇笔记的格式硬底线）
 
@@ -456,9 +458,11 @@ For grouped subfigures (`Figure 3a/3b/3c`, `(a)/(b)/(c)` under one caption), emb
 
 ```bash
 obsidian vault="paper_notes" read file="<PaperTitle>"
+wc -l "/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/notes/<TopCategory>/<SubCategory>/<PaperTitle>.md"
 ```
 
 **Content checklist**:
+- **Minimum length**: saved Markdown note is ≥350 lines unless the user explicitly requested a short summary
 - **Pseudocode**: based on actual source code, not just paper descriptions
 - **Code mapping table**: `| Paper Concept | Source File | Key Class/Function |` (§section-level granularity; line numbers are `paper-to-skill`'s job)
 - **Code reference header**: `> **Code reference**: \`branch\` @ \`short_sha\` (date)` appears before the mapping table
@@ -481,17 +485,24 @@ paper_notes/
             └── <PaperTitle>/            ← extracted figures (PNG/SVG)
 ```
 
+**Vault hygiene check (MANDATORY)**: before notifying the user, confirm this run did not create scratch artifacts inside the vault:
+```bash
+VAULT="/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes"
+find "$VAULT" \( -name review_packet.md -o -type d \( -name tmp -o -name _tmp -o -name _work \) \) -print
+```
+If the command shows artifacts created by the current run, move them to the external scratch directory or delete them before finalizing. If it shows pre-existing user artifacts, do not create more; mention the pre-existing paths separately.
+
 **Notify the user**: print the top category, subcategory, hierarchical category tag, and the full file path after saving.
 
 ### Step 7: Budgeted parallel review and fix (MANDATORY)
 
 After saving, run at least one review round, but keep the review context small.
 
-1. First create a compact `review_packet.md` (≤ ~120 lines by default; hard cap ~200 lines) containing: note path, image directory, paper/PDF path, source repo URL, `github_ref`, figure/table inventory, sections changed, exact unresolved risks, and reviewer scopes requested.
+1. First create an external scratch directory outside the Obsidian vault, then create a compact `review_packet.md` there (≤ ~120 lines by default; hard cap ~200 lines). Use `$PAPER_TO_NOTE_WORKDIR/<paper-slug>/` if set, otherwise `${TMPDIR:-/tmp}/paper-to-note/<paper-slug>/`. Never place the packet next to the note, under `paper_notes/notes/`, under `paper_notes/files/`, or under vault-level `tmp/` / `_tmp` folders. The packet should contain: note path, image directory, paper/PDF path, source repo URL, `github_ref`, figure/table inventory, sections changed, exact unresolved risks, and reviewer scopes requested.
 2. Use `$REVIEWER` only as the reviewer instruction source; pass reviewers **file paths + the compact packet**, not the full paper, full note, full prior transcript, full skill text, or full source tree.
 3. Reviewer set is **rule-based, not agent-judged**:
    - **Format Reviewer**: ALWAYS run. Checks Mandatory Skeleton items 1–3, code indentation, image paths, `<img>` tags, LaTeX syntax.
-   - **Content Reviewer**: ALWAYS run. Checks 5 sections completeness, per-component pseudocode, results numbers, intuition paragraphs.
+   - **Content Reviewer**: ALWAYS run. Checks 5 sections completeness, ≥350-line minimum, per-component pseudocode, results numbers, intuition paragraphs.
    - **Source Code Reviewer**: MANDATORY whenever the paper has a public GitHub repo. The only valid skip condition is the note explicitly says `代码搜索未找到开源实现`. Checks Mandatory Skeleton items 4–5, pseudocode vs actual code, training-config sourcing, paper-vs-code gaps.
    - Do NOT use the prior Low/Normal/High self-classification — it caused notes with public code to silently skip source-code review.
 4. Round 1: run all applicable reviewers in parallel (typically 3, or 2 if no public code).
@@ -509,6 +520,7 @@ This step is non-negotiable for quality, but repeated full-context review is for
 - **Result numbers must be exact**: read directly from paper tables
 - **Method section must be thorough**: this is where readers get the most value
 - **Notes should be as detailed as possible by default**: include all major method details, experiment settings, ablation findings, qualitative observations, and appendix details that affect understanding; only shorten when the user explicitly asks for brevity
+- **Minimum note length**: final saved notes must be ≥350 Markdown lines by default; expand with evidence-backed technical content if shorter
 - **Detailed does not mean padded**: every added paragraph should explain a concrete mechanism, evidence item, design trade-off, limitation, or reproducibility detail from the paper/code
 - **ALWAYS search for code**: even if paper says "will release", search anyway — it may already be public
 - **Figures must be included**: at minimum the architecture diagram and key result figures
@@ -607,6 +619,12 @@ These are real bugs found in past notes. Check every note against this list.
 - **Effect**: Obsidian squeezes one column into a narrow strip, wraps every token vertically, and makes the table unreadable.
 - **Rule**: for long configs, use subsections or definition lists instead of wide Markdown tables. Keep the exact config path, but split key values into semantic bullets such as Sampling, Trajectory/Loss, Optimizer, Reward weights.
 - **Check**: if a table row contains a path or key-value cell longer than ~120 characters, convert it before saving.
+
+### P11: Obsidian vault pollution by temporary/review artifacts
+- **Bug**: saving `review_packet.md`, extracted paper text, reviewer scratch notes, cloned repos, or folders such as `tmp/`, `_tmp/`, `_work/` inside `paper_notes/`.
+- **Effect**: Obsidian indexes and displays workflow internals as user-facing notes/folders, polluting search, graph view, and navigation.
+- **Rule**: the vault must contain only final reading notes under `notes/` and final referenced figures/assets under `files/`; all review packets and scratch files must live outside the vault in `$PAPER_TO_NOTE_WORKDIR/<paper-slug>/` or `${TMPDIR:-/tmp}/paper-to-note/<paper-slug>/`.
+- **Check**: before final response, run the vault hygiene check from Step 5e and remove or move any current-run scratch artifacts found inside the vault.
 
 ### P6: Over-codification — note becomes code dump, not reading notes
 - **Bug**: Method section becomes a pile of pseudocode blocks with no intuition paragraph; Idea section just says "本文提出了XXX方法" without explaining what's fundamentally new
