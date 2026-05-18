@@ -70,6 +70,15 @@ The most common failure mode is re-counting the same long context across many tu
 
 ## Note Format
 
+### Detail-first Standard（默认深度要求）
+
+Unless the user explicitly asks for a short summary, **write the note as a detailed reading note, not an abstract-style overview**. The target is that a reader can understand the paper's motivation, method, experiments, and practical caveats from the note itself without immediately reopening the PDF.
+
+- **Depth over brevity**: include concrete assumptions, design motivations, component-by-component mechanics, algorithm flow, objective terms, important implementation details, ablation interpretations, and limitations. Avoid one-paragraph summaries for sections where the paper spends substantial space.
+- **Specificity over generic prose**: name the actual modules, datasets, baselines, reward models, losses, schedules, hyperparameters, and measured numbers. Do not write generic phrases like "提升效果明显" without the exact table/figure evidence.
+- **Explain, do not only transcribe**: after formulas, figures, algorithms, and tables, add human-readable interpretation: what each symbol/component means, why the design is needed, what failure mode it addresses, and how it differs from prior work.
+- **Appendix is in scope**: if appendix/supplement includes training details, extra ablations, prompt lists, implementation choices, or failure cases that materially affect understanding or reproduction, incorporate them into §3–§5 instead of ignoring them.
+
 ### 0. Mandatory Skeleton（每篇笔记的格式硬底线）
 
 These are **non-negotiable structural items**. A note missing any of them will be marked P0 by the Format Reviewer and must be fixed before approval.
@@ -97,7 +106,7 @@ These are **non-negotiable structural items**. A note missing any of them will b
 
 ### 1–5: Required Section Content
 
-Output strictly in these 5 sections, each with substantive content:
+Output strictly in these 5 sections, each with substantive content. **Default to maximum useful detail**: do not compress a multi-page method/experiment section into a few bullets unless the user explicitly asks for a brief note.
 
 ---
 
@@ -123,12 +132,12 @@ Output strictly in these 5 sections, each with substantive content:
 
 ### 3. Method (方法)
 
-**This is the most important section — expand in detail.**
+**This is the most important section — expand in detail.** Cover every novel component and every paper section that materially contributes to the method. If the paper has multiple modules/stages/objectives, each should get its own subsection with intuition, mechanics, formula/code where applicable, and interaction with the rest of the pipeline.
 
 <!-- checklist (per P6): method section MUST include ALL 5 items below; include at least one intuition paragraph (prose, not math/code) -->
 
 1. **Overall framework**: describe the overall design, **embed the architecture figure**
-2. **Key components**: explain each core module with sub-figures where available
+2. **Key components**: explain each core module with sub-figures where available. For each component, include: what input it consumes, what output it produces, which objective or constraint it optimizes, why the authors need it, and what would likely fail if it were removed.
    - **Every figure MUST have a "Figure N 解读" paragraph** after the `<img>` tag, **separated by a blank line** (see P8)
    - The walkthrough should explain what each part of the figure shows and how it relates to the method
    - When text references a figure (e.g. "如图 3a 所示"), always specify the figure number
@@ -499,8 +508,11 @@ This step is non-negotiable for quality, but repeated full-context review is for
 - **If information is missing**: state "论文未详细说明" — never fabricate
 - **Result numbers must be exact**: read directly from paper tables
 - **Method section must be thorough**: this is where readers get the most value
+- **Notes should be as detailed as possible by default**: include all major method details, experiment settings, ablation findings, qualitative observations, and appendix details that affect understanding; only shorten when the user explicitly asks for brevity
+- **Detailed does not mean padded**: every added paragraph should explain a concrete mechanism, evidence item, design trade-off, limitation, or reproducibility detail from the paper/code
 - **ALWAYS search for code**: even if paper says "will release", search anyway — it may already be public
 - **Figures must be included**: at minimum the architecture diagram and key result figures
+- **Obsidian math compatibility**: prefer `\boldsymbol{...}` over `\bm{...}` in note formulas; avoid macros that Obsidian/KaTeX commonly renders as raw red text unless the vault is known to support them
 
 ## Known Pitfalls — Must Avoid
 
@@ -559,7 +571,8 @@ These are real bugs found in past notes. Check every note against this list.
 - **Rule**: for each paper section that spans ≥1 page, the corresponding note section should have proportional depth. Specifically:
   - If the paper devotes a full section to a topic, the notes should cover: motivation for the design, technical details, key equations/algorithms, and limitations/caveats
   - Don't summarize a 2-page section in 3 bullet points
-- **Check**: after writing, scan for any section <10 lines that corresponds to a major paper section
+  - Include appendix material when it contains training configs, extra ablations, prompt/evaluation details, or implementation notes that change interpretation
+- **Check**: after writing, scan for any section <10 lines that corresponds to a major paper section; if found, expand it before review unless the paper itself is genuinely terse
 
 ### P8: `<img>` tag and text on adjacent lines breaks inline LaTeX
 - **Bug**: `<img>` tag on its own line followed by "Figure N 解读" text on the very next line (no blank line in between) causes `$...$` inline math in the text to render as raw text instead of LaTeX
