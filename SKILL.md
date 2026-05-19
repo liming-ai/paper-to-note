@@ -348,7 +348,7 @@ Physical AI
 Classification rules:
 
 - Choose exactly one `notes/<TopCategory>/<SubCategory>/` destination using the paper's main contribution, not just keywords in the title.
-- Prefer an existing subcategory when it fits. Create a new subcategory only when the paper is materially outside the live taxonomy; if you create one, also use the matching `files/<TopCategory>/<SubCategory>/<PaperTitle>/` asset path.
+- Prefer an existing subcategory when it fits. Before creating anything new, compare the paper's **main contribution** against every current top-level/subcategory option above. Create a new subcategory automatically only when you have **high confidence** that the paper's subject is materially outside all existing categories; if confidence is medium/low, choose the closest existing subcategory and note the fit caveat in the final notification instead of expanding the taxonomy. If you create one, also use the matching `files/<TopCategory>/<SubCategory>/<PaperTitle>/` asset path.
 - Do not repeat the parent name in the child label (e.g. use `Pretraining & Architecture`, not `VLM Pretraining & Architecture`).
 - Frontmatter `tags` must include one hierarchical category tag of the form `paper/<top-slug>/<sub-slug>` plus specific technical tags. Remove stale historical category tags such as `visual-understanding`, `rl-for-visual-generation`, `world-model-long-video-generation`, `multi-modal-generation`, `diffusion-acceleration`, `rl-for-llm-vlm`, and `agent-memory`.
 
