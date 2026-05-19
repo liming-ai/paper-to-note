@@ -50,7 +50,7 @@ The most common failure mode is re-counting the same long context across many tu
 - **Default to path-based handoff**: write intermediate paper text, figure inventory, code notes, and review findings to files in an external scratch directory outside the Obsidian vault; pass only paths plus a short objective in prompts.
 - **Do not paste full artifacts into prompts**: pass file paths for the PDF, note `.md`, image directory, repo checkout, and source files. Only paste small excerpts needed for the current decision.
 - **Create a compact work packet outside the vault** before review: write a short `review_packet.md` under `$PAPER_TO_NOTE_WORKDIR/<paper-slug>/` if set, otherwise `${TMPDIR:-/tmp}/paper-to-note/<paper-slug>/`. It should contain only paper metadata, note path, image dir, code repo/ref, figure inventory, unresolved risks, and changed sections since the last review. Keep it under ~120 lines by default and never exceed ~200 lines.
-- **Never pollute the Obsidian vault with scratch artifacts**: do not create `review_packet.md`, `tmp/`, `_tmp/`, `_work/`, extracted paper text, reviewer notes, or cloned repos anywhere under `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/` (or the equivalent `~/OneDrive/paper_notes/`). The vault may contain only the final note under `notes/` and final referenced assets under `files/`.
+- **Never pollute the Obsidian vault with scratch artifacts**: do not create `review_packet*.md`, `revew_packet*.md`, `tmp/`, `_tmp/`, `_work/`, extracted paper text, reviewer notes, or cloned repos anywhere under `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/` (or the equivalent `~/OneDrive/paper_notes/`). The vault may contain only the final note under `notes/` and final referenced assets under `files/`.
 - **Read selectively**: when revisiting the paper/note/source, use section-level reads, grep headers, or table/figure inventories instead of reloading the full paper, full note, full source tree, or prior chat.
 - **Bound multi-agent usage**: multi-agent review is allowed, but use the rule-based set below (do NOT let the agent self-judge "low risk" to skip Source Code Reviewer):
   - **Always run** Format Reviewer + Content Reviewer.
@@ -489,7 +489,7 @@ paper_notes/
 **Vault hygiene check (MANDATORY)**: before notifying the user, confirm this run did not create scratch artifacts inside the vault:
 ```bash
 VAULT="/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes"
-find "$VAULT" \( -name review_packet.md -o -type d \( -name tmp -o -name _tmp -o -name _work \) \) -print
+find "$VAULT" \( -type f \( -name 'review_packet*.md' -o -name 'revew_packet*.md' -o -name 'review-packet*.md' \) -o -type d \( -name tmp -o -name _tmp -o -name _work -o -name 'review_packet*' \) \) -print
 ```
 If the command shows artifacts created by the current run, move them to the external scratch directory or delete them before finalizing. If it shows pre-existing user artifacts, do not create more; mention the pre-existing paths separately.
 
@@ -623,7 +623,7 @@ These are real bugs found in past notes. Check every note against this list.
 - **Check**: if a table row contains a path or key-value cell longer than ~120 characters, convert it before saving.
 
 ### P11: Obsidian vault pollution by temporary/review artifacts
-- **Bug**: saving `review_packet.md`, extracted paper text, reviewer scratch notes, cloned repos, or folders such as `tmp/`, `_tmp/`, `_work/` inside `paper_notes/`.
+- **Bug**: saving `review_packet*.md` / `revew_packet*.md`, extracted paper text, reviewer scratch notes, cloned repos, or folders such as `tmp/`, `_tmp/`, `_work/` inside `paper_notes/`.
 - **Effect**: Obsidian indexes and displays workflow internals as user-facing notes/folders, polluting search, graph view, and navigation.
 - **Rule**: the vault must contain only final reading notes under `notes/` and final referenced figures/assets under `files/`; all review packets and scratch files must live outside the vault in `$PAPER_TO_NOTE_WORKDIR/<paper-slug>/` or `${TMPDIR:-/tmp}/paper-to-note/<paper-slug>/`.
 - **Check**: before final response, run the vault hygiene check from Step 5e and remove or move any current-run scratch artifacts found inside the vault.
