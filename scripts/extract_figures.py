@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Extract figures from academic papers.
 
-Supports two modes:
+Supports four modes:
 1. arxiv source mode: download LaTeX source, extract original figure files
 2. PDF rendering mode: render specific pages as PNG (fallback)
 3. compose mode: combine related subfigures into one SVG group
+4. auto-width mode: recommend per-figure `<img width="...">` for note embeds
+   (also runs automatically after --arxiv / --compose unless --no-auto-width)
 
 Usage:
-    # arxiv source mode (preferred)
+    # arxiv source mode (preferred); also prints recommended widths
     python extract_figures.py --arxiv <arxiv_id> <output_dir>
 
     # PDF page rendering mode (last-resort fallback)
@@ -15,6 +17,9 @@ Usage:
 
     # grouped subfigures, preserving the paper's row/grid layout
     python extract_figures.py <output_dir> --compose "fig3_group:row:a.svg,b.svg,c.svg"
+
+    # standalone width recommendation for an existing figure dir
+    python extract_figures.py --auto-width <output_dir>
 """
 
 import sys
@@ -32,6 +37,25 @@ from xml.sax.saxutils import escape
 
 MAX_WIDTH = 1200  # max image width in pixels for PDF fallback modes
 SOURCE_PDF_DPI = 600  # high-DPI fallback when source vector conversion is unavailable
+
+# --- Recommended <img width="..."> for embedding figures in Obsidian notes ---
+# Goal: keep rendered height roughly <= REC_MAX_HEIGHT so a single figure does
+# not eat a whole screen, while letting wide horizontal plots use the full
+# in-note width.
+REC_MAX_HEIGHT = 520   # target rendered height cap (px) for typical figures
+REC_MAX_WIDTH = 920    # never recommend wider than this in note body
+REC_MIN_WIDTH = 360    # avoid tiny embeds for very tall/narrow figures
+REC_QUANTIZE = 20      # round recommended width to a visually clean step
+# Hero / teaser / overview / framework / composite-group figures often deserve
+# a slightly larger render so multi-panel content stays legible, but only when
+# the figure itself is square-ish or portrait — wide horizontal plots already
+# use the column width via the height cap, so boosting them just pushes the
+# embed against `REC_MAX_WIDTH` without making the figure clearer.
+REC_HERO_HEIGHT_BOOST = 1.2
+REC_HERO_BOOST_ASPECT_CUTOFF = 1.3  # only boost when aspect (w/h) < this value
+REC_HERO_TOKENS = (
+    "teaser", "overview", "framework", "pipeline", "architecture", "_group",
+)
 
 
 def resize_image(path: str, max_width: int = MAX_WIDTH):
@@ -494,6 +518,124 @@ def _image_dimensions(path: str) -> tuple[float, float]:
         return 400.0, 300.0
 
 
+def _is_hero_figure(name: str) -> bool:
+    """Return True when the filename suggests a teaser/overview/framework figure.
+
+    Hero figures are usually the visual anchor of the note; we allow a slightly
+    larger render so multi-panel composites don't look cramped at the default
+    height cap.
+    """
+    lower = name.lower()
+    return any(token in lower for token in REC_HERO_TOKENS)
+
+
+def recommend_width(
+    image_w: float,
+    image_h: float,
+    *,
+    is_hero: bool = False,
+    max_height: int = REC_MAX_HEIGHT,
+    max_width: int = REC_MAX_WIDTH,
+    min_width: int = REC_MIN_WIDTH,
+    quantize: int = REC_QUANTIZE,
+) -> int:
+    """Recommend an `<img width="...">` value from a figure's intrinsic size.
+
+    Strategy: cap the rendered height at `max_height` (slightly larger for
+    hero/teaser figures) and back-solve the width from the aspect ratio, then
+    clamp to `[min_width, max_width]` and round to a clean step. This avoids
+    oversized embeds for square or portrait composite figures while still
+    letting very wide plots (r >> 1) use the full note column.
+    """
+    if image_w <= 0 or image_h <= 0:
+        return min(max_width, 720)
+    aspect = image_w / image_h
+    boost = REC_HERO_HEIGHT_BOOST if (is_hero and aspect < REC_HERO_BOOST_ASPECT_CUTOFF) else 1.0
+    cap_h = max_height * boost
+    by_height = cap_h * aspect
+    width = min(max_width, by_height)
+    width = max(min_width, width)
+    width = int(round(width / quantize)) * quantize
+    return width
+
+
+def auto_width_report(
+    output_dir: str,
+    *,
+    max_height: int = REC_MAX_HEIGHT,
+    max_width: int = REC_MAX_WIDTH,
+    min_width: int = REC_MIN_WIDTH,
+    quantize: int = REC_QUANTIZE,
+    extensions: tuple[str, ...] = (".svg", ".png", ".jpg", ".jpeg", ".webp"),
+) -> list[dict]:
+    """Print a recommended-width table for every embeddable figure in a dir.
+
+    The output is intentionally compact and copy-pasteable into a note: each
+    row shows the suggested `<img>` width given the figure's real geometry, so
+    LLMs no longer default to a hard-coded `width="1000"` for everything.
+    """
+    if not os.path.isdir(output_dir):
+        print(f"ERROR: not a directory: {output_dir}", file=sys.stderr)
+        return []
+
+    entries: list[dict] = []
+    for filename in sorted(os.listdir(output_dir)):
+        path = os.path.join(output_dir, filename)
+        if not os.path.isfile(path):
+            continue
+        if os.path.splitext(filename)[1].lower() not in extensions:
+            continue
+        try:
+            w, h = _image_dimensions(path)
+        except Exception:
+            continue
+        is_hero = _is_hero_figure(filename)
+        rec = recommend_width(
+            w, h,
+            is_hero=is_hero,
+            max_height=max_height,
+            max_width=max_width,
+            min_width=min_width,
+            quantize=quantize,
+        )
+        entries.append({
+            "filename": filename,
+            "intrinsic_w": w,
+            "intrinsic_h": h,
+            "aspect": (w / h) if h else 0.0,
+            "is_hero": is_hero,
+            "recommended_width": rec,
+        })
+
+    if not entries:
+        print(f"(no embeddable figures in {output_dir})")
+        return entries
+
+    name_w = max(len(e["filename"]) for e in entries)
+    name_w = max(name_w, len("filename"))
+    print()
+    print("Recommended <img width=...> for figures in")
+    print(f"  {output_dir}")
+    print(f"  height_cap={max_height}px  width_cap={max_width}px  min={min_width}px  step={quantize}px  hero_boost={REC_HERO_HEIGHT_BOOST:g}x")
+    print()
+    print(f"  {'filename'.ljust(name_w)}  intrinsic       aspect  hero  recommended")
+    print(f"  {'-' * name_w}  --------------  ------  ----  -----------")
+    for e in entries:
+        intrinsic = f"{int(round(e['intrinsic_w']))}x{int(round(e['intrinsic_h']))}"
+        hero_mark = "yes" if e["is_hero"] else "no"
+        print(
+            f"  {e['filename'].ljust(name_w)}  {intrinsic:<14}  {e['aspect']:>5.2f}  {hero_mark:<4}  width=\"{e['recommended_width']}\""
+        )
+    print()
+    print("Copy-paste embed blocks (centered, ready for the note):")
+    for e in entries:
+        print(f'  <div align="center">')
+        print(f'    <img src="<rel-path>/{e["filename"]}" alt="..." width="{e["recommended_width"]}">')
+        print(f'  </div>')
+    print()
+    return entries
+
+
 def _mime_type(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     return {
@@ -614,8 +756,19 @@ if __name__ == "__main__":
                         help="Downscale arXiv source raster images to --max-width (off by default; preserves source quality)")
     parser.add_argument("--max-width", type=int, default=MAX_WIDTH,
                         help=f"Max width for PDF fallback rendering and optional --resize-source (default: {MAX_WIDTH}; use 0 to disable)")
+    parser.add_argument("--auto-width", action="store_true",
+                        help="Print recommended <img width=...> values for figures in output_dir (auto-runs after --arxiv/--compose).")
+    parser.add_argument("--no-auto-width", action="store_true",
+                        help="Suppress the auto-width report that normally runs after --arxiv/--compose.")
+    parser.add_argument("--rec-max-height", type=int, default=REC_MAX_HEIGHT,
+                        help=f"Target max rendered height (px) for auto-width recommendations (default: {REC_MAX_HEIGHT}).")
+    parser.add_argument("--rec-max-width", type=int, default=REC_MAX_WIDTH,
+                        help=f"Cap on recommended <img width> (default: {REC_MAX_WIDTH}).")
+    parser.add_argument("--rec-min-width", type=int, default=REC_MIN_WIDTH,
+                        help=f"Floor on recommended <img width> (default: {REC_MIN_WIDTH}).")
     args = parser.parse_args()
 
+    did_extract_or_compose = False
     if args.arxiv:
         extract_from_arxiv_source(
             args.arxiv,
@@ -624,23 +777,34 @@ if __name__ == "__main__":
             resize_source=args.resize_source,
             max_width=args.max_width,
         )
+        did_extract_or_compose = True
     elif args.pdf and args.crop:
         if not args.figures:
             print("ERROR: --crop requires --figures specs")
             sys.exit(1)
         crop_pdf_figures(args.pdf, args.output_dir, args.figures)
+        did_extract_or_compose = True
     elif args.pdf:
         render_pdf_pages(args.pdf, args.output_dir, getattr(args, 'pages', None))
-    elif args.compose:
-        pass
-    elif args.trim:
+        did_extract_or_compose = True
+    elif args.compose or args.trim or args.auto_width:
         pass
     else:
-        print("ERROR: Specify --arxiv <id>, --pdf <path>, --compose, or --trim")
+        print("ERROR: Specify --arxiv <id>, --pdf <path>, --compose, --trim, or --auto-width")
         sys.exit(1)
 
     if args.compose:
         compose_grouped_figures(args.output_dir, args.compose)
+        did_extract_or_compose = True
 
     if args.trim:
         trim_output_dir_images(args.output_dir, threshold=args.trim_threshold, pad=args.trim_pad)
+
+    should_report_widths = args.auto_width or (did_extract_or_compose and not args.no_auto_width)
+    if should_report_widths:
+        auto_width_report(
+            args.output_dir,
+            max_height=args.rec_max_height,
+            max_width=args.rec_max_width,
+            min_width=args.rec_min_width,
+        )

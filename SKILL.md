@@ -30,6 +30,8 @@ Generate high-quality structured reading notes for academic papers.
 - `~/.claude/skills/_shared/pseudocode-rules.md` — 伪代码质量规则
 - `~/.claude/skills/_shared/known-categories.md` — Obsidian 分类
 - `paper-to-note/scripts/extract_figures.py` — canonical 图像提取工具；arXiv source-first，保留原始 source raster/vector 质量。若 runtime 还有旧的 `$SHARED/extract_figures.py` 镜像，必须确认它与本脚本一致后再用。
+- `paper-to-note/scripts/calibrate_widths.py` — 全 vault 批量校准/验收图片嵌入：`<img width="N">` 与 `extract_figures.recommend_width` 同步，并通过 `--auto-center` 把裸 `<img>` 包成 `<div align="center"> ... </div>` / 多 img 同行时整行 inline-wrap。dry-run 默认无副作用，`--apply` 时自动 backup 到 `~/.cache/paper_notes_calibration_backup/<ts>/`。同时承担**自适应图片宽度推荐**（`--auto-width` 子命令；详见 Step 5d / P12）。
+- `paper-to-note/scripts/calibrate_widths.py` — 全 vault 批量校准 / 验收工具，支持 dry-run 与 `--apply`（带备份）。Step 5e Verify 阶段必须用 `--tolerance 0 --limit-diffs 0` dry-run 检查"所有 `<img>` width 都已是脚本推荐值"。
 
 ### Runtime Path Fallback（跨 runtime 路径约定）
 
@@ -79,8 +81,18 @@ Unless the user explicitly asks for a short summary, **write the note as a detai
 - **Specificity over generic prose**: name the actual modules, datasets, baselines, reward models, losses, schedules, hyperparameters, and measured numbers. Do not write generic phrases like "提升效果明显" without the exact table/figure evidence.
 - **Explain, do not only transcribe**: after formulas, figures, algorithms, and tables, add human-readable interpretation: what each symbol/component means, why the design is needed, what failure mode it addresses, and how it differs from prior work.
 - **Appendix is in scope**: if appendix/supplement includes training details, extra ablations, prompt lists, implementation choices, or failure cases that materially affect understanding or reproduction, incorporate them into §3–§5 instead of ignoring them.
-- **Minimum length**: unless the user explicitly asks for a short summary, the final saved note MUST contain at least **350 Markdown lines**. If the note is shorter, expand with substantive method details, experiment evidence, appendix material, code-to-paper interpretation, figure/table explanations, and limitations; never pad with repetitive filler.
+- **Minimum length**: unless the user explicitly asks for a short summary, the final saved note MUST contain at least **3000 effective words**. Effective words are counted as `Chinese CJK characters + English/alphanumeric word tokens` after stripping YAML frontmatter, code blocks, image tags/embeds, URLs, and Markdown syntax. If the note is shorter, expand with substantive method details, experiment evidence, appendix material, code-to-paper interpretation, figure/table explanations, and limitations; never pad with repetitive filler, artificial line breaks, or one-sentence-per-line formatting.
 - **Depth priority**: allocate the most detail to **§1 Motivation, §2 Idea, and especially §3 Method**. These three sections should carry the main paper understanding: why the problem matters, what the core insight is, and how the method actually works. Only after these are clear and detailed should §4 Experimental Setup and §5 Experimental Results be summarized with exact evidence.
+
+### Existing-note optimization（已有笔记补强）
+
+When asked to optimize existing notes below the minimum length, the trigger is **effective word count < 3000**, not Markdown line count.
+
+- **Preserve the existing note path and category by default**; only move/rename when the existing category is clearly wrong and the user asked for taxonomy cleanup.
+- **Back up before editing**: copy the original `.md` to an external scratch/backup directory outside the vault before overwriting the note.
+- **Expand by substance, not formatting**: add missing mechanisms, paper/code evidence, figure/table interpretation, limitations, and exact experimental details. Do not increase length by splitting sentences into many lines, adding boilerplate checklists, duplicating section prompts, or inserting generic filler.
+- **Re-count after editing** using the same `effective_words = CJK chars + Latin/alphanumeric tokens` script in Step 5e. The final note must be `effective_words >= 3000` unless the user explicitly sets a lower threshold.
+- **Batch hygiene**: for large vault-wide optimization, process notes in small batches and run a post-batch check for word count, image refs, code fences, and vault scratch artifacts before continuing.
 
 ### 0. Mandatory Skeleton（每篇笔记的格式硬底线）
 
@@ -245,7 +257,7 @@ Before finalizing the note, verify every embedded image is a real figure crop, n
 
 - For each referenced PNG/JPG, check pixel dimensions and near-white bounding box. If non-white content uses <70% of image height or width, re-crop/trim the file before saving the note.
 - Use a small padding crop (roughly 20–30 px) around the detected non-white content; preserve labels/arrows and do not crop into axes or captions.
-- If an image becomes visually tiny in Obsidian despite `width="1000"`, suspect hidden whitespace inside the PNG/PDF crop first; fix the asset, not only the Markdown width.
+- If an image becomes visually tiny in Obsidian despite a generous `<img width="...">`, suspect hidden whitespace inside the PNG/PDF crop first; fix the asset, not only the Markdown width.
 - Re-open or preview the final embedded figures after trimming. Dimensions alone are not sufficient because PDF page crops often look valid but contain large blank margins.
 
 Helper command:
@@ -426,13 +438,59 @@ for sd in glob.glob(os.path.expanduser("~/ai-skills/skills/*/")):
 # 若 paper_to_skill_value 仍为 None，说明该论文暂无对应 skill → 省略该 property
 ```
 
-#### 5d: Figure embedding
+#### 5d: Figure embedding (HARD REQUIREMENT — adaptive width is non-negotiable)
 
 Figures are stored in `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/files/<TopCategory>/<SubCategory>/<PaperTitle>/`, mirroring the note category.
 
-In note content, reference figures using relative paths from the note file:
-- `<img src="../../../files/<TopCategory>/<SubCategory>/<PaperTitle>/fig_name.png" alt="Figure X" width="1000">`
-- Or use Obsidian embeds if the files directory is within vault: `![[fig_name.png|1000]]`
+In note content, reference figures using relative paths from the note file. **Every embed is wrapped in a `<div align="center"> ... </div>` block** so it renders centered in Obsidian / GitHub / VS Code preview (a bare `<img>` left-aligns by default — see P13).
+
+Standard single-figure form:
+```
+<div align="center">
+  <img src="../../../files/<TopCategory>/<SubCategory>/<PaperTitle>/fig_name.png" alt="Figure X" width="<W>">
+</div>
+```
+
+Side-by-side comparison strip (multi-`<img>` on one line — typical for `(a)/(b)` qualitative panels) uses **inline** wrap so the panels stay on one row:
+```
+<div align="center"><img src=".../fig_a.png" alt="..." width="<Wa>"> <img src=".../fig_b.png" alt="..." width="<Wb>"></div>
+```
+
+Obsidian-embed form (also wrapped):
+```
+<div align="center">
+
+![[fig_name.png|<W>]]
+
+</div>
+```
+
+The `<W>` value is **never** chosen by feel and **never** a fixed default like `1000`. It is always taken from the per-figure recommendation produced by `extract_figures.py --auto-width` (or the equivalent manual rule when the script is unavailable). The `<div align="center">` wrapper is **also non-optional** — it is enforced in Step 5e Verify and is a P12 / P13 regression check.
+
+##### Adaptive-width workflow (MUST follow in this order)
+
+1. **BEFORE writing the first `<img>` / `![[]]`**, run `--auto-width` on the figure dir and keep the report visible while you draft the figure section. Never write `<img>` tags from memory or from another note's values.
+   ```bash
+   python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py \
+     --auto-width "/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/files/<TopCategory>/<SubCategory>/<PaperTitle>"
+   ```
+   The report prints, for every figure file, intrinsic dimensions, aspect ratio, whether it is a hero/composite, and a `width="<N>"` value to paste into the `<img>` tag. Note: the script also runs this automatically after `--arxiv` extraction and `--compose`, so on a fresh note you usually do not need a separate manual call — but you MUST still consume the report.
+
+2. **Use the recommended value verbatim** for each figure. Do not pick "round numbers" like 800 / 1000 / 1200. The recommendation is already quantized to 20 px and cap-balanced so adjacent figures look visually consistent.
+
+3. **Allowed deviation: ±80 px** from the recommendation, only with a one-line justification in the working notes (e.g. "Figure 4 shrunk to 460 because adjacent figure already uses 520 and they share a row of comparison"). Never silently deviate.
+
+4. **For unusual aesthetics** (e.g. a heavy composite that must stay compact, or a sparse plot that needs to breathe) rerun with a different height cap rather than handpicking a width:
+   - `--rec-max-height 460` → tighter, ~10% smaller across the board
+   - `--rec-max-height 580` → looser, ~10% larger
+   Pasting the rerun's recommendation back into the note keeps the values in the script's audit trail.
+
+5. **Width policy reference (for reading the recommendation, not for replacing the script)**:
+   - Wide horizontal plot (aspect ≥ 1.4, metric curves / bar charts): 700–900 px
+   - Near-square figure (0.9 ≤ aspect < 1.4, method diagrams): 520–720 px
+   - Composite / multi-panel / portrait (aspect < 0.9 or `_group.svg`): 420–540 px
+
+6. **Manual fallback (only when `extract_figures.py` is unavailable)**: open the figure, read the intrinsic size (SVG `viewBox` or raster pixel dims), then compute `width = round(min(920, 520 × aspect) / 20) × 20`, clamped to `[360, 920]`. For hero / overview / framework / pipeline / architecture / `_group` figures with `aspect < 1.3`, use a 1.2× height cap (`520 × 1.2 = 624`). Document in the note that the manual rule was used.
 
 **Wide table hygiene**: do not put long code paths and long hyperparameter lists into one Markdown table row. Obsidian will force awkward column widths and make key values appear as a narrow unreadable strip. For training configs or code mappings with long values, prefer short sections / definition lists:
 ```
@@ -443,32 +501,74 @@ In note content, reference figures using relative paths from the note file:
 ```
 Use tables only when every cell is short enough to wrap cleanly.
 
-**CRITICAL (P8)**: always leave a **blank line** between `<img>` and the "Figure N 解读" text. Without the blank line, Markdown treats the text as part of an HTML block and `$...$` inline math won't render:
+**CRITICAL (P8)**: always leave a **blank line** between the closing `</div>` of the figure wrapper and the "Figure N 解读" text. Without the blank line, Markdown treats the next paragraph as part of the HTML block and `$...$` inline math won't render:
 ```
-<img src="..." alt="Figure 3" width="1000">
+<div align="center">
+  <img src="..." alt="Figure 3" width="720">
+</div>
 
 Figure 3 解读：由 $K$ 个 reward models 打分…
 ```
 
-For grouped subfigures (`Figure 3a/3b/3c`, `(a)/(b)/(c)` under one caption), embed **one composite image**:
-- `<img src="../../../files/<TopCategory>/<SubCategory>/<PaperTitle>/fig3_group.svg" alt="Figure 3a–3c" width="1000">`
-- Follow with `Figure 3a–3c 解读：...` (after a blank line)
-- Never place each subpanel as a separate `width="1000"` image unless the original paper shows them as separate figures.
+For grouped subfigures (`Figure 3a/3b/3c`, `(a)/(b)/(c)` under one caption), embed **one composite image** at the per-figure recommended width (typically 460–540 px for portrait composites, **not** 1000), still inside a `<div align="center">` wrapper:
+```
+<div align="center">
+  <img src="../../../files/<TopCategory>/<SubCategory>/<PaperTitle>/fig3_group.svg" alt="Figure 3a–3c" width="<recommended>">
+</div>
+
+Figure 3a–3c 解读：…
+```
+Never place each subpanel as a separate large image unless the original paper shows them as separate figures.
 
 #### 5e: Verify note creation
 
+Effective-word count:
+
 ```bash
 obsidian vault="paper_notes" read file="<PaperTitle>"
-wc -l "/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/notes/<TopCategory>/<SubCategory>/<PaperTitle>.md"
+python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path("/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/notes/<TopCategory>/<SubCategory>/<PaperTitle>.md")
+text = p.read_text(errors="ignore")
+text = re.sub(r"^---\s*\n.*?\n---\s*\n", " ", text, flags=re.S)
+text = re.sub(r"```.*?```", " ", text, flags=re.S)
+text = re.sub(r"!\[\[[^\]]+\]\]|<img\b[^>]*>|https?://\S+|`[^`]*`|<[^>]+>", " ", text, flags=re.I)
+text = re.sub(r"[#>*_\[\]()|{}:;,.，。！？、（）《》“”\"'=-]", " ", text)
+cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+latin = len(re.findall(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*", text))
+print(f"effective_words={cjk + latin} cjk_chars={cjk} latin_tokens={latin}")
+PY
 ```
 
+Adaptive-width + centering sanity (MANDATORY — fails if any embed deviates from `--auto-width` recommendation, and fails if any `<img>` is not wrapped in a centering container):
+
+```bash
+# Run dry-run with --auto-center so both regressions show up in one pass.
+# Filter to the note we just created. Expect:
+#   width  calibrate: <none for this note>
+#   center wrap     : <none for this note>
+#   center wrap-line: <none for this note>
+python3 ~/.claude/skills/paper-to-note/scripts/calibrate_widths.py \
+  --auto-center --tolerance 0 --limit-diffs 3000 --limit-issues 0 \
+  --vault "/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes" \
+  | grep -E "<PaperTitle>"
+```
+
+Expected output is **empty** for the note we just created (no calibrate / no wrap / no wrap-line listed). If anything shows up:
+- `[img ]` / `[line]` lines = the `<img>` tag(s) are not wrapped in `<div align="center">`. Fix by wrapping each embed before saving.
+- `width N -> M` lines = the `<img>` width does not match the `--auto-width` recommendation. Paste the recommended values back into the `<img>` tags and rerun.
+- `[width:skip-no-asset]` lines = the note references a figure file that does not exist (broken ref); fix the filename or extract the missing asset before saving.
+
 **Content checklist**:
-- **Minimum length**: saved Markdown note is ≥350 lines unless the user explicitly requested a short summary
+- **Minimum length**: saved Markdown note is ≥3000 effective words unless the user explicitly requested a short summary
 - **Pseudocode**: based on actual source code, not just paper descriptions
 - **Code mapping table**: `| Paper Concept | Source File | Key Class/Function |` (§section-level granularity; line numbers are `paper-to-skill`'s job)
 - **Code reference header**: `> **Code reference**: \`branch\` @ \`short_sha\` (date)` appears before the mapping table
 - **`github_ref` property**: set via Obsidian CLI (format: `branch@short_sha`)
 - **`paper_to_skill` property**: set if matching skill found in `~/ai-skills/skills/`
+- **Adaptive figure widths**: every `<img>` / `![[name|N]]` width matches the per-figure `--auto-width` recommendation (or differs by ≤80 px with a working-notes justification). The `calibrate_widths.py --auto-center --tolerance 0` dry-run above must report `width calibrate: 0` and `center wrap / wrap-line: 0` for this note.
+- **Centered figure embeds**: every `<img>` is wrapped in a `<div align="center">...</div>` block (or its inline form for multi-`<img>` side-by-side lines). Bare `<img>` is a P13 regression.
 - **Idea section core insight**: 1–3 sentences stating what's fundamentally new (per P6)
 - **Method section intuition paragraph**: at least one prose paragraph explaining *why* it works, not just formulas/code (per P6)
 - All 5 sections with substantive content (each with per-section checklist, see "Note Format" above)
@@ -503,7 +603,7 @@ After saving, run at least one review round, but keep the review context small.
 2. Use `$REVIEWER` only as the reviewer instruction source; pass reviewers **file paths + the compact packet**, not the full paper, full note, full prior transcript, full skill text, or full source tree.
 3. Reviewer set is **rule-based, not agent-judged**:
    - **Format Reviewer**: ALWAYS run. Checks Mandatory Skeleton items 1–3, code indentation, image paths, `<img>` tags, LaTeX syntax.
-   - **Content Reviewer**: ALWAYS run. Checks 5 sections completeness, ≥350-line minimum, per-component pseudocode, results numbers, intuition paragraphs.
+   - **Content Reviewer**: ALWAYS run. Checks 5 sections completeness, ≥3000-effective-word minimum, per-component pseudocode, results numbers, intuition paragraphs.
    - **Source Code Reviewer**: MANDATORY whenever the paper has a public GitHub repo. The only valid skip condition is the note explicitly says `代码搜索未找到开源实现`. Checks Mandatory Skeleton items 4–5, pseudocode vs actual code, training-config sourcing, paper-vs-code gaps.
    - Do NOT use the prior Low/Normal/High self-classification — it caused notes with public code to silently skip source-code review.
 4. Round 1: run all applicable reviewers in parallel (typically 3, or 2 if no public code).
@@ -522,10 +622,12 @@ This step is non-negotiable for quality, but repeated full-context review is for
 - **Method section must be thorough**: this is where readers get the most value
 - **Depth priority**: make Motivation, Idea, and Method detailed and clear first; then cover Experimental Setup and Results with exact but more compact evidence
 - **Notes should be as detailed as possible by default**: include all major method details, experiment settings, ablation findings, qualitative observations, and appendix details that affect understanding; only shorten when the user explicitly asks for brevity
-- **Minimum note length**: final saved notes must be ≥350 Markdown lines by default; expand with evidence-backed technical content if shorter
+- **Minimum note length**: final saved notes must be ≥3000 effective words by default; expand with evidence-backed technical content if shorter
 - **Detailed does not mean padded**: every added paragraph should explain a concrete mechanism, evidence item, design trade-off, limitation, or reproducibility detail from the paper/code
 - **ALWAYS search for code**: even if paper says "will release", search anyway — it may already be public
 - **Figures must be included**: at minimum the architecture diagram and key result figures
+- **Adaptive figure widths**: every `<img>` / `![[name|N]]` MUST use the per-figure `--auto-width` recommendation. Hard-coded `width="1000"` for everything is a P12 regression. Verify with `calibrate_widths.py --auto-center --tolerance 0` dry-run before considering the note done.
+- **Centered figure embeds**: every `<img>` MUST be wrapped in a `<div align="center"> ... </div>` block (multi-line form for single-img lines, inline form for multi-img side-by-side lines). Bare `<img>` left-aligns and is a P13 regression. The same dry-run above also enforces this.
 - **Obsidian math compatibility**: prefer `\boldsymbol{...}` over `\bm{...}` in note formulas; avoid macros that Obsidian/KaTeX commonly renders as raw red text unless the vault is known to support them
 
 ## Known Pitfalls — Must Avoid
@@ -568,7 +670,7 @@ These are real bugs found in past notes. Check every note against this list.
 - **How**:
   1. Inspect the `.tex` figure environment for `subfigure`, `subcaptionbox`, `minipage`, `tabular`, or repeated `\includegraphics`.
   2. Compose the extracted panel files with `extract_figures.py --compose "fig3_group:row:a.svg,b.svg,c.svg"` or crop the already-combined PDF figure.
-  3. Use one `<img ... width="1000">` for the composite plus one `Figure 3a–3c 解读` paragraph.
+  3. Use one `<img ... width="<recommended>">` for the composite (run `--auto-width` to get the value; per P12 this is typically 460–540 for portrait composites, NOT 1000) plus one `Figure 3a–3c 解读` paragraph.
   4. Delete unreferenced individual panel files unless they are reused elsewhere.
 - **Check**: search the final note for adjacent full-width embeds of the same figure number (`Figure 3a`, `Figure 3b`, `Figure 3c`). If found, replace with a grouped composite.
 
@@ -595,13 +697,13 @@ These are real bugs found in past notes. Check every note against this list.
 - **Rule**: ALWAYS insert a blank line between any `<img>` tag and the following "Figure N 解读" paragraph
 - **Good**:
   ```
-  <img src="..." alt="Figure 3" width="1000">
+  <img src="..." alt="Figure 3" width="720">
 
   Figure 3 解读：分别由 $K$ 个 reward models 打分…
   ```
 - **Bad**:
   ```
-  <img src="..." alt="Figure 3" width="1000">
+  <img src="..." alt="Figure 3" width="720">
   Figure 3 解读：分别由 $K$ 个 reward models 打分…
   ```
 - **Check**: after writing notes, verify no `<img ...>` line is immediately followed by text on the next line without a blank line separator
@@ -627,6 +729,42 @@ These are real bugs found in past notes. Check every note against this list.
 - **Effect**: Obsidian indexes and displays workflow internals as user-facing notes/folders, polluting search, graph view, and navigation.
 - **Rule**: the vault must contain only final reading notes under `notes/` and final referenced figures/assets under `files/`; all review packets and scratch files must live outside the vault in `$PAPER_TO_NOTE_WORKDIR/<paper-slug>/` or `${TMPDIR:-/tmp}/paper-to-note/<paper-slug>/`.
 - **Check**: before final response, run the vault hygiene check from Step 5e and remove or move any current-run scratch artifacts found inside the vault.
+
+### P12: One-size-fits-all `width="1000"` for embedded figures
+- **Bug**: every `<img>` tag in the note uses `width="1000"` regardless of the figure's actual aspect ratio. This made sense for early notes that were mostly wide horizontal plots, but it now mixes badly with composite/portrait figures (e.g. `fig*_group.svg`, framework / overview diagrams whose `viewBox` is taller than wide).
+- **Effect**: a 864×1118 composite at `width="1000"` renders ~1294 px tall in Obsidian and dominates an entire screen, while a 493×352 plot at the same `width="1000"` only renders ~715 px tall and looks fine. The visual mismatch is the symptom — the root cause is hard-coded width, not the figure itself.
+- **Rule**: pick `<img width=...>` per figure based on its intrinsic geometry. Cap rendered height at ~520 px for normal figures (~624 px for hero / overview / framework / pipeline / architecture / `_group` figures with aspect < 1.3); back-solve width from aspect ratio; clamp to `[360, 920]` and round to 20 px. Wide horizontal plots can use 700–900; near-square figures 520–720; portrait/composite figures 420–540.
+- **How**:
+  1. Run `python3 ~/.claude/skills/paper-to-note/scripts/extract_figures.py --auto-width <files-dir>` (also runs automatically after `--arxiv` / `--compose`).
+  2. Paste the `width="<N>"` value from the report into each `<img>` tag — do NOT edit numbers by feel.
+  3. If the report gives a value that still feels off for a specific figure, rerun with `--rec-max-height 460` (more compact) or `--rec-max-height 580` (looser); never silently revert to `width="1000"`.
+- **Check**: after writing, every `<img>` tag's `width` should match the script's recommendation for that file (or differ by ≤80 px with a one-line justification in the working notes). Multiple `<img>` tags all sharing the same `width="1000"` is a regression.
+
+### P13: Bare `<img>` left-aligns in Obsidian
+- **Bug**: writing a raw `<img src="..." alt="..." width="N">` on its own line, with no surrounding container.
+- **Effect**: `<img>` is an inline element; without a block-level parent it hugs the left margin. Adjacent figures all line up against the left edge while the right side of the page sits empty, which looks lopsided next to the body text and misaligns "Figure N 解读" paragraphs that the reader expects to scan top-to-bottom under each figure.
+- **Rule**: every figure embed MUST be wrapped in a centering block. Two equivalent shapes are accepted:
+  ```
+  <!-- Single-figure line: multi-line block -->
+  <div align="center">
+    <img src="..." alt="..." width="<W>">
+  </div>
+
+  <!-- Multi-figure side-by-side line: inline block -->
+  <div align="center"><img src=".../a.png" alt="..." width="<Wa>"> <img src=".../b.png" alt="..." width="<Wb>"></div>
+  ```
+  Obsidian-embed `![[fig|W]]` should be wrapped the same way (with the embed on its own line surrounded by blank lines inside the `<div>`).
+- **How**:
+  1. When drafting the note: paste the recommended `<img>` from `extract_figures.py --auto-width` already inside a `<div align="center">` block.
+  2. When auditing an existing note or migrating a vault of legacy notes:
+     ```bash
+     python3 ~/.claude/skills/paper-to-note/scripts/calibrate_widths.py \
+       --auto-center --tolerance 0          # dry-run, prints wrap plan
+     python3 ~/.claude/skills/paper-to-note/scripts/calibrate_widths.py \
+       --auto-center --apply                # rewrite in place with backup
+     ```
+     `--auto-center` automatically detects already-centered embeds (skips them), wraps standalone `<img>` lines as multi-line blocks, and wraps pure multi-`<img>` lines (e.g. `<img a> <img b>`) as inline blocks so the side-by-side layout is preserved. `<img>` tags that share a line with prose are flagged `skip-inline-img` and must be wrapped manually.
+- **Check**: after writing or migrating, the dry-run `calibrate_widths.py --auto-center --tolerance 0` must print `center wrap: 0` and `center wrap-line: 0` for the affected note. Any non-zero count is a P13 regression.
 
 ### P6: Over-codification — note becomes code dump, not reading notes
 - **Bug**: Method section becomes a pile of pseudocode blocks with no intuition paragraph; Idea section just says "本文提出了XXX方法" without explaining what's fundamentally new

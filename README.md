@@ -28,7 +28,7 @@ Given a paper (PDF, arXiv link, or title), the skill instructs an AI agent to:
 
 ```bash
 # Clone to your skills directory
-git clone https://github.com/<your-username>/paper-to-note.git ~/.claude/skills/paper-to-note
+git clone https://github.com/liming-ai/paper-to-note.git ~/.claude/skills/paper-to-note
 
 # Copy shared resources (if not already present)
 cp -rn ~/.claude/skills/paper-to-note/_shared ~/.claude/skills/_shared
@@ -38,7 +38,7 @@ cp -rn ~/.claude/skills/paper-to-note/_shared ~/.claude/skills/_shared
 
 ```bash
 # Clone to the shared agents skills directory
-git clone https://github.com/<your-username>/paper-to-note.git ~/.agents/skills/paper-to-note
+git clone https://github.com/liming-ai/paper-to-note.git ~/.agents/skills/paper-to-note
 
 # Copy shared resources (if not already present)
 cp -rn ~/.agents/skills/paper-to-note/_shared ~/.agents/skills/_shared
@@ -101,7 +101,8 @@ paper-to-note/
 ├── agents/
 │   └── paper-to-note-reviewer.md  # Quality reviewer agent definition
 ├── scripts/
-│   └── extract_figures.py       # Figure extraction tool (arxiv/PDF/compose modes)
+│   ├── extract_figures.py       # Figure extraction tool (arxiv/PDF/compose/auto-width modes)
+│   └── calibrate_widths.py      # Vault-wide figure width and centering audit/fix tool
 ├── _shared/                     # Shared infrastructure with paper-to-skill
 │   ├── commit-anchor.md         # Commit SHA anchoring format spec
 │   ├── pseudocode-rules.md      # Pseudocode quality rules
@@ -140,10 +141,15 @@ python scripts/extract_figures.py --arxiv 2504.12345 ./output_dir
 python scripts/extract_figures.py --pdf paper.pdf --crop ./output_dir \
   --figures "fig1:4:72,48,540,370" "table1:5:100,490,520,610"
 
-# 3. Compose grouped subfigures into one SVG
+# 3. Recommend adaptive embed widths
+python scripts/extract_figures.py --auto-width ./output_dir
+
+# 4. Compose grouped subfigures into one SVG
 python scripts/extract_figures.py ./output_dir \
   --compose "fig3_group:row:panel_a.svg,panel_b.svg,panel_c.svg"
 ```
+
+Use `scripts/calibrate_widths.py --auto-center --tolerance 0` to audit existing notes for width drift, broken figure references, and uncentered `<img>` embeds.
 
 ## Customization
 
