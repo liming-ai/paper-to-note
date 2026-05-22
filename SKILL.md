@@ -117,6 +117,8 @@ These are **non-negotiable structural items**. A note missing any of them will b
 4. **Training-config numbers MUST come from the actual launch script / experiment config** (e.g. `config/<paper_name>.py`, `configs/<exp>.yaml`, `scripts/train_*.py`), NOT from `config/base.py` default values or generic README defaults. Whenever the reported number could plausibly be a default, the note MUST cite the specific file path that overrides it.
 5. **When paper formula and released code disagree** (e.g. paper says HPSv3 but code calls `hpsv2`; paper writes "average over $K$ frames" but code samples 1 random frame), the note MUST explicitly call out the gap in §3 Method, format: `论文公式与 released code 实现差异：...`. Do NOT silently align the note to one side.
 
+**Blog / article mode**: if the input is a blog post, project article, or non-paper technical essay, save it under `paper_notes/blogs/` (unless the user says otherwise), not the paper taxonomy. The Markdown filename MUST start with the visible/published date, e.g. `YYYY-MM-DD Blog Title.md`, and frontmatter MUST include `date` or `published`. Prefer the date visible in the rendered page/user-facing post; if raw metadata disagrees due to timezone or site build artifacts, record the rendered date in the filename/frontmatter and keep the raw value only as a secondary note if useful.
+
 ---
 
 ### 1–5: Required Section Content
@@ -249,6 +251,16 @@ When the arXiv source places multiple panels under one `figure` caption (e.g. `s
 - Write one combined paragraph such as `Figure 3a–3c 解读：...`, explaining each panel inside the paragraph. **Do not embed grouped panels as three separate full-width images.**
 - Only embed individual subpanels separately if the paper treats them as standalone figures; cap each at `width="320"`–`width="450"` or place them side-by-side.
 
+#### Blog / client-rendered figures（non-arXiv pages）
+
+For blogs and frontend-rendered article pages, raw HTML is only a hint. Many important figures are injected after hydration or drawn as SVG/HTML/CSS chart blocks, so `curl`/WebFetch/Defuddle may show no useful `<img>` even when the browser visibly shows figures.
+
+- **Do not count `og:image` / social preview images / thumbnails as content figures** unless the user explicitly asks for a cover/thumbnail. Blog notes should not include thumbnails by default.
+- First collect normal content images from the rendered page (`document.images`, `currentSrc`, `srcset`). Then inspect rendered-only visual blocks: `[role=img]`, `.recharts-wrapper`, `svg`, `canvas`, figure-like containers, and nearby captions.
+- For Recharts/SVG/HTML/CSS diagrams that are not downloadable as a normal image, use a browser-rendered crop/screenshot of the visual block, not a full-page screenshot. Capture the complete chart/diagram with labels and caption context when needed; verify the crop is not mostly whitespace.
+- Store blog assets under `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/files/blogs/<yyyy-mm-dd-slug>/` and reference them from the blog note as `../files/blogs/<yyyy-mm-dd-slug>/<file>.png`.
+- After writing, check that every saved asset is referenced and every visible key figure from the rendered page has either been embedded or consciously skipped with a short reason in working notes.
+
 **After writing notes**: delete any extracted figures that are NOT referenced by an `<img>` tag or Obsidian image embed in the final notes. Keep only files that are actually embedded.
 
 #### Figure whitespace QA（必须做）
@@ -314,6 +326,8 @@ The output directory should mirror the current multi-level note category: `/User
 **Use the Obsidian CLI to create and manage notes.** This ensures proper vault integration (backlinks, tags, search indexing).
 
 **Vault name**: `paper_notes` (current macOS path: `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/`; some runtimes may expose the same vault as `/Users/bytedance/OneDrive/paper_notes/`)
+
+**Blog / article destination**: if the user asks for a blog/article note, write directly to `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/blogs/YYYY-MM-DD <Title>.md`; use assets in `/Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/files/blogs/<yyyy-mm-dd-slug>/`; relative figure paths from the note should start with `../files/blogs/...`.
 
 #### 5a: Classify into current multi-level category
 
@@ -451,6 +465,14 @@ Standard single-figure form:
 </div>
 ```
 
+Robust single-figure form for blog screenshots / unusually wide HTML-CSS diagrams that still look left-shifted in Obsidian despite `align="center"`:
+```
+<div align="center" style="text-align:center;">
+  <img src="../files/blogs/<yyyy-mm-dd-slug>/fig_name.png" alt="Figure X" style="display:inline-block; width:760px; max-width:100%; height:auto;">
+</div>
+```
+Use this only for the affected figure, and prefer a compact width such as 720–800 px for very wide rendered screenshots instead of stretching them to 920+ px.
+
 Side-by-side comparison strip (multi-`<img>` on one line — typical for `(a)/(b)` qualitative panels) uses **inline** wrap so the panels stay on one row:
 ```
 <div align="center"><img src=".../fig_a.png" alt="..." width="<Wa>"> <img src=".../fig_b.png" alt="..." width="<Wb>"></div>
@@ -569,6 +591,7 @@ Expected output is **empty** for the note we just created (no calibrate / no wra
 - **`paper_to_skill` property**: set if matching skill found in `~/ai-skills/skills/`
 - **Adaptive figure widths**: every `<img>` / `![[name|N]]` width matches the per-figure `--auto-width` recommendation (or differs by ≤80 px with a working-notes justification). The `calibrate_widths.py --auto-center --tolerance 0` dry-run above must report `width calibrate: 0` and `center wrap / wrap-line: 0` for this note.
 - **Centered figure embeds**: every `<img>` is wrapped in a `<div align="center">...</div>` block (or its inline form for multi-`<img>` side-by-side lines). Bare `<img>` is a P13 regression.
+- **Blog rendered figures**: for blog/article notes, raw HTML image inventory is not enough; rendered-page figures/charts must be checked, thumbnails skipped by default, and all referenced assets must live under `files/blogs/<date-slug>/`.
 - **Idea section core insight**: 1–3 sentences stating what's fundamentally new (per P6)
 - **Method section intuition paragraph**: at least one prose paragraph explaining *why* it works, not just formulas/code (per P6)
 - All 5 sections with substantive content (each with per-section checklist, see "Note Format" above)
@@ -765,6 +788,23 @@ These are real bugs found in past notes. Check every note against this list.
      ```
      `--auto-center` automatically detects already-centered embeds (skips them), wraps standalone `<img>` lines as multi-line blocks, and wraps pure multi-`<img>` lines (e.g. `<img a> <img b>`) as inline blocks so the side-by-side layout is preserved. `<img>` tags that share a line with prose are flagged `skip-inline-img` and must be wrapped manually.
 - **Check**: after writing or migrating, the dry-run `calibrate_widths.py --auto-center --tolerance 0` must print `center wrap: 0` and `center wrap-line: 0` for the affected note. Any non-zero count is a P13 regression.
+
+### P14: Raw HTML misses client-rendered blog figures
+- **Bug**: treating `curl` / WebFetch / Defuddle output as the complete figure inventory for a blog or frontend-rendered article, then concluding "no figures" because raw HTML has no useful `<img>` tags.
+- **Effect**: visible charts/diagrams from the browser are omitted from the note; sometimes only a social-preview thumbnail is captured, which is worse than no figure because it misrepresents the article content.
+- **Rule**: for blog/article pages, inspect the rendered DOM whenever the browser visibly shows figures or the article discusses figures/results. Check `document.images`, `currentSrc`, `[role=img]`, `.recharts-wrapper`, `svg`, `canvas`, and figure-like containers. Do not include `og:image`, cover art, or thumbnails by default.
+- **Fix**: download normal rendered images by URL; for Recharts/SVG/HTML/CSS visual blocks, save a browser-rendered crop of the visual block into `paper_notes/files/blogs/<date-slug>/` with a semantic filename. After writing, verify referenced-local-assets count, missing refs, and unused files.
+
+### P15: Centered wrapper still looks left-shifted for wide rendered screenshots
+- **Bug**: a very wide blog screenshot / HTML-CSS diagram is wrapped in `<div align="center">`, but Obsidian/theme rendering still makes the visual appear left-shifted or visually too dominant.
+- **Effect**: one figure breaks the otherwise centered visual rhythm of the note, especially when neighbouring figures are normal raster plots.
+- **Rule**: keep the normal P13 wrapper for most figures, but for the affected wide screenshot use an inline-block image inside a text-centered container and shrink the rendered width (usually 720–800 px):
+  ```
+  <div align="center" style="text-align:center;">
+    <img src="../files/blogs/<date-slug>/fig_name.png" alt="Figure X" style="display:inline-block; width:760px; max-width:100%; height:auto;">
+  </div>
+  ```
+- **Check**: preview the actual note in Obsidian/Codex, not just the Markdown. If the figure moves farther left after a change, revert and apply the inline-block form above only to that figure.
 
 ### P6: Over-codification — note becomes code dump, not reading notes
 - **Bug**: Method section becomes a pile of pseudocode blocks with no intuition paragraph; Idea section just says "本文提出了XXX方法" without explaining what's fundamentally new
