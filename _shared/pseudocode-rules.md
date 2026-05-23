@@ -12,6 +12,9 @@
 - **每个核心组件一个独立代码块**（不合并多个组件到一段伪代码）
 - **Python/PyTorch 风格**：使用 `def` / `class` / `for` / `if` / `torch.*` / `F.*`；不使用 Algorithm-1 式编号步骤
 - **已有 shape 注释保留**：如果源码注释或 docstring 标注了 tensor shape，在伪代码中保留 `# [B, C, H, W]` 形式
+- **每一行可执行伪代码都要有中文行内注释**：说明这一行在算法中做什么、为什么需要、数据/张量如何流动；不要只机械翻译变量名
+- **注释可合并信息**：source / paper / shape / `[CODE-ONLY]` 标注可以和中文解释写在同一个 `# ...` 中，但每个可执行语句仍必须有解释性中文
+- **例外行**：空行、装饰器、纯注释行、仅包含闭合括号/方括号/花括号的行可以不写行内中文注释
 
 ## 允许
 
@@ -26,6 +29,7 @@
 - **猜测 tensor shapes**：只写代码注释 / docstring 明确标注的 shape
 - 伪代码与源码对应关系不清晰（reviewer 会抽查比对）
 - 同一组件多段不同伪代码（选一个主版本即可）
+- 可执行语句缺少中文行内注释，或注释只写“计算 loss / forward pass”这类无法帮助读者理解算法意图的空泛描述
 
 ## 示例
 
@@ -35,13 +39,11 @@
 # source: model/dit.py:L145-L189
 # paper: §3.2, Algorithm 1
 def forward(self, x, t, cond):
-    # [B, C, H, W] → DiT forward
-    x_t = self.patch_embed(x)              # paper: Eq.5
-    t_emb = self.time_embed(t)
-    h = self.blocks(x_t + t_emb, cond)     # paper: Eq.7, core DiT blocks
-    out = self.head(h)
-    # [CODE-ONLY] output scaled by 1/sqrt(2) for numerical stability
-    return out * (1.0 / math.sqrt(2))
+    x_t = self.patch_embed(x)  # 将输入图像从像素网格切成 patch tokens，得到 Transformer 可处理的序列表示；shape 来自源码注释 [B, C, H, W]
+    t_emb = self.time_embed(t)  # 把 diffusion timestep 编码成条件向量，让网络知道当前去噪阶段
+    h = self.blocks(x_t + t_emb, cond)  # 将图像 tokens、时间条件和外部条件送入 DiT blocks，建模条件去噪所需的全局交互；paper: Eq.7
+    out = self.head(h)  # 把 Transformer hidden states 投影回模型需要预测的输出空间，例如噪声或 velocity
+    return out * (1.0 / math.sqrt(2))  # [CODE-ONLY] 对输出做数值缩放以稳定训练，这是源码实现中的额外 trick
 ```
 
 ### 坏的伪代码（会被 reviewer FAIL）
@@ -49,12 +51,9 @@ def forward(self, x, t, cond):
 ```python
 # DiT forward pass
 def forward(x, t, cond):
-    # compute patch embedding
     x = patch_embed(x)
-    # add time embedding
     x = x + t_embed
-    # run through DiT blocks to get output
     return blocks(x, cond)
 ```
 
-问题：无 source 标注、无 shape、核心逻辑退化为英文描述、没写关键细节（scale factor）。
+问题：无 source 标注、无 shape、可执行语句没有中文行内注释、核心逻辑退化为英文描述、没写关键细节（scale factor）。

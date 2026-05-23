@@ -168,15 +168,19 @@ Output strictly in these 5 sections, each with substantive content. **Default to
    - **Pseudocode MUST be Python/PyTorch style** — use real Python syntax with PyTorch API (e.g. `torch.tensor`, `nn.Module`, `F.cross_entropy`)
    - Use `python` code blocks for syntax highlighting
    - Format: write as a runnable Python/PyTorch function or class, not numbered steps
+   - **Every executable pseudocode line MUST include a Chinese inline comment** explaining what that line does in the algorithm. Prefer comments that explain algorithmic intent, tensor/data flow, or why the operation is needed; do not merely translate variable names.
+   - For visually dense lines, shape comments and source/paper anchors may share the same `# ...` comment, but the comment must still explain the line's role.
+   - Comments are optional only for blank lines, decorators, closing brackets/parentheses, and a line whose only content is a comment.
    - Example:
    ```python
    def train_step(model, batch, optimizer):
-       x, y = batch
-       logits = model(x)  # forward pass
-       loss = F.cross_entropy(logits, y)
-       loss.backward()
-       optimizer.step()
-       return loss.item()
+       x, y = batch  # 取出当前 mini-batch 的输入和监督标签，作为本次训练的数据
+       logits = model(x)  # 前向传播得到每个类别的预测 logits，用于后续计算分类损失
+       loss = F.cross_entropy(logits, y)  # 用真实标签监督 logits，得到当前 batch 的交叉熵训练目标
+       optimizer.zero_grad()  # 清空上一轮反向传播残留的梯度，避免梯度累积污染本次更新
+       loss.backward()  # 对 loss 反向传播，计算模型参数相对于训练目标的梯度
+       optimizer.step()  # 根据刚计算出的梯度更新模型参数，完成一次优化步
+       return loss.item()  # 返回 Python 标量形式的 loss，便于日志记录和训练监控
    ```
 5. **Code-to-paper mapping table**: map key paper concepts to actual source files/classes. **Always add a reference header** immediately before the table:
    ```
