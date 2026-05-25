@@ -1,6 +1,6 @@
 ---
 name: paper-to-note
-description: "Use when reading an academic paper or paper URL and saving structured Chinese notes with metadata/assets to Obsidian."
+description: "Use when reading one or more academic papers or paper URLs and saving structured Chinese notes with metadata/assets to Obsidian. For multi-paper inputs, split the batch and run one paper-to-note worker per paper in parallel."
 allowed-tools:
   - Read
   - Write
@@ -23,6 +23,30 @@ Generate high-quality structured reading notes for academic papers.
 - **本 skill 目的**：生成"阅读笔记"，让人类读者**读懂论文**（motivation / 核心贡献 / 方法直觉）。
 - **如果你的目标是"把算法植入新 codebase"**（需要逐行代码映射、Porting Checklist、commit 锚点、模块接口 contracts）：请使用 `paper-to-skill` skill，产物在 `~/ai-skills/skills/`。
 - **最佳工作流**：先用本 skill 读懂，再用 `paper-to-skill` 提炼工程手册。本 skill 在保存笔记时，如果已有对应 paper-to-skill skill，会自动填写 frontmatter 的 `paper_to_skill` 属性以便互相跳转。
+
+## Multi-paper Batch Orchestration（多论文并发入口）
+
+When the user provides **more than one paper** (multiple URLs, arXiv IDs, PDFs, titles, or a mixed list), the top-level agent is only a **batch coordinator**. Do **not** process the papers serially in the main context.
+
+1. **Normalize the batch first**: split the user input into one `paper_spec` per paper, preserving the original URL/path/title and any user-supplied constraints. Create a batch scratch root outside the vault, e.g. `$PAPER_TO_NOTE_WORKDIR/batch-<timestamp>/` if set, otherwise `${TMPDIR:-/tmp}/paper-to-note/batch-<timestamp>/`.
+2. **Spawn one worker per paper** using the runtime's direct parallel-worker mechanism (`Agent`, `mcp__codex__codex`, or equivalent). Each worker MUST be instructed to use this same `paper-to-note` skill for exactly one `paper_spec` and to run the full single-paper workflow independently, including Steps 1–7 and mandatory review.
+3. **Keep worker contexts isolated**: give each worker only its own `paper_spec`, a unique scratch directory `<batch-root>/<paper-slug>/`, the vault path, and any global user constraints. Do not pass the full batch, full conversation, full skill text, or other workers' artifacts.
+4. **Run as a replenishing worker pool**: launch all workers at once when the runtime safely supports it; for large batches or rate-limited environments, maintain a pool of up to **6 concurrent workers**. As soon as any worker finishes, immediately start the next pending paper so the pool stays full until the queue is empty. Never combine multiple papers into one worker just to reduce worker count.
+5. **Coordinator responsibilities after workers finish**: collect each worker's final note path, category/subcategory, status, and blockers; report a compact per-paper result table. If a worker fails, report that paper's blocker without rerunning the whole batch.
+
+Worker prompt template:
+
+```text
+Use the paper-to-note skill for exactly one paper.
+Paper spec: <URL / PDF path / title>
+User constraints: <batch-level constraints relevant to this paper>
+Scratch dir (outside vault): <batch-root>/<paper-slug>/
+Vault: /Users/bytedance/Library/CloudStorage/OneDrive-个人/paper_notes/
+
+Run the complete single-paper workflow, including code search, figure extraction, note creation, verification, vault hygiene check, and mandatory review. Return only: status, note path, asset dir, category/subcategory, github_ref if any, verification summary, and blockers if any.
+```
+
+If the current runtime has no worker/agent tool, say so explicitly and fall back to single-paper sequential execution only after notifying the user; do not pretend concurrency happened.
 
 ## Shared Infrastructure
 
@@ -81,17 +105,19 @@ Unless the user explicitly asks for a short summary, **write the note as a detai
 - **Specificity over generic prose**: name the actual modules, datasets, baselines, reward models, losses, schedules, hyperparameters, and measured numbers. Do not write generic phrases like "提升效果明显" without the exact table/figure evidence.
 - **Explain, do not only transcribe**: after formulas, figures, algorithms, and tables, add human-readable interpretation: what each symbol/component means, why the design is needed, what failure mode it addresses, and how it differs from prior work.
 - **Appendix is in scope**: if appendix/supplement includes training details, extra ablations, prompt lists, implementation choices, or failure cases that materially affect understanding or reproduction, incorporate them into §3–§5 instead of ignoring them.
-- **Minimum length**: unless the user explicitly asks for a short summary, the final saved note MUST contain at least **3000 effective words**. Effective words are counted as `Chinese CJK characters + English/alphanumeric word tokens` after stripping YAML frontmatter, code blocks, image tags/embeds, URLs, and Markdown syntax. If the note is shorter, expand with substantive method details, experiment evidence, appendix material, code-to-paper interpretation, figure/table explanations, and limitations; never pad with repetitive filler, artificial line breaks, or one-sentence-per-line formatting.
+- **Coverage over word-count padding**: do **not** force a numeric minimum length. `effective_words` is only a weak diagnostic for obviously shallow notes, not a pass/fail target. A note is complete when the paper's major claims, mechanisms, evidence, caveats, appendix details, and code links are covered at the right level of detail. Never expand solely to hit a character/word count.
+- **Structured decomposition before prose**: choose structure by semantic units, not by paragraph length. In §3 Method, every major module/stage/objective/prompt-policy family should get its own `####` subsection, bullet list, or compact table. If one paragraph would contain >2 independent mechanisms/benchmark variants or >5 sentences, split it before writing. Appendix prompt/rubric/system-prompt material should usually be grouped as bullets/tables per policy family instead of compressed into a run-on paragraph.
+- **Screen-density check**: after drafting, inspect the rendered shape, not just line count. A section is still too dense if one `###` leaf section contains many consecutive prose paragraphs but no `####` semantic anchors, even when each paragraph is individually short. Add `####` anchors for stages, data construction, prompt policies, reward/rubric design, benchmark groups, ablations, implementation paths, or failure modes before final review.
 - **Depth priority**: allocate the most detail to **§1 Motivation, §2 Idea, and especially §3 Method**. These three sections should carry the main paper understanding: why the problem matters, what the core insight is, and how the method actually works. Only after these are clear and detailed should §4 Experimental Setup and §5 Experimental Results be summarized with exact evidence.
 
 ### Existing-note optimization（已有笔记补强）
 
-When asked to optimize existing notes below the minimum length, the trigger is **effective word count < 3000**, not Markdown line count.
+When asked to optimize existing notes, the trigger is **missing coverage or poor readability**, not Markdown line count or a hard effective-word threshold.
 
 - **Preserve the existing note path and category by default**; only move/rename when the existing category is clearly wrong and the user asked for taxonomy cleanup.
 - **Back up before editing**: copy the original `.md` to an external scratch/backup directory outside the vault before overwriting the note.
 - **Expand by substance, not formatting**: add missing mechanisms, paper/code evidence, figure/table interpretation, limitations, and exact experimental details. Do not increase length by splitting sentences into many lines, adding boilerplate checklists, duplicating section prompts, or inserting generic filler.
-- **Re-count after editing** using the same `effective_words = CJK chars + Latin/alphanumeric tokens` script in Step 5e. The final note must be `effective_words >= 3000` unless the user explicitly sets a lower threshold.
+- **Re-count after editing** using the same `effective_words = CJK chars + Latin/alphanumeric tokens` script in Step 5e, but report it as a diagnostic only. If a note is short, inspect whether required mechanisms/evidence are missing; if coverage is complete, do not add filler.
 - **Batch hygiene**: for large vault-wide optimization, process notes in small batches and run a post-batch check for word count, image refs, code fences, and vault scratch artifacts before continuing.
 
 ### 0. Mandatory Skeleton（每篇笔记的格式硬底线）
@@ -208,6 +234,10 @@ Output strictly in these 5 sections, each with substantive content. **Default to
 ---
 
 ## Execution Steps
+
+### Step 0: Batch gate（多论文先分发）
+
+Before Step 1, check whether the input contains more than one paper. If yes, stop the single-paper path in the coordinator and follow **Multi-paper Batch Orchestration（多论文并发入口）** above: normalize the list, spawn one isolated worker per paper, and collect results. The remaining Steps 1–7 are the workflow each worker runs for its assigned single paper.
 
 ### Step 1: Obtain paper content
 
@@ -583,7 +613,7 @@ Expected output is **empty** for the note we just created (no calibrate / no wra
 - `[width:skip-no-asset]` lines = the note references a figure file that does not exist (broken ref); fix the filename or extract the missing asset before saving.
 
 **Content checklist**:
-- **Minimum length**: saved Markdown note is ≥3000 effective words unless the user explicitly requested a short summary
+- **Coverage/readability**: all 5 sections satisfy their checklists; major method/appendix/code topics are decomposed into readable semantic units; report `effective_words` as a diagnostic, but do not use it as a hard pass/fail target
 - **Pseudocode**: based on actual source code, not just paper descriptions
 - **Code mapping table**: `| Paper Concept | Source File | Key Class/Function |` (§section-level granularity; line numbers are `paper-to-skill`'s job)
 - **Code reference header**: `> **Code reference**: \`branch\` @ \`short_sha\` (date)` appears before the mapping table
@@ -626,7 +656,7 @@ After saving, run at least one review round, but keep the review context small.
 2. Use `$REVIEWER` only as the reviewer instruction source; pass reviewers **file paths + the compact packet**, not the full paper, full note, full prior transcript, full skill text, or full source tree.
 3. Reviewer set is **rule-based, not agent-judged**:
    - **Format Reviewer**: ALWAYS run. Checks Mandatory Skeleton items 1–3, code indentation, image paths, `<img>` tags, LaTeX syntax.
-   - **Content Reviewer**: ALWAYS run. Checks 5 sections completeness, ≥3000-effective-word minimum, per-component pseudocode, results numbers, intuition paragraphs.
+   - **Content Reviewer**: ALWAYS run. Checks 5 sections completeness, readable semantic decomposition, no length-only padding, per-component pseudocode, results numbers, intuition paragraphs.
    - **Source Code Reviewer**: MANDATORY whenever the paper has a public GitHub repo. The only valid skip condition is the note explicitly says `代码搜索未找到开源实现`. Checks Mandatory Skeleton items 4–5, pseudocode vs actual code, training-config sourcing, paper-vs-code gaps.
    - Do NOT use the prior Low/Normal/High self-classification — it caused notes with public code to silently skip source-code review.
 4. Round 1: run all applicable reviewers in parallel (typically 3, or 2 if no public code).
@@ -644,8 +674,8 @@ This step is non-negotiable for quality, but repeated full-context review is for
 - **Result numbers must be exact**: read directly from paper tables
 - **Method section must be thorough**: this is where readers get the most value
 - **Depth priority**: make Motivation, Idea, and Method detailed and clear first; then cover Experimental Setup and Results with exact but more compact evidence
-- **Notes should be as detailed as possible by default**: include all major method details, experiment settings, ablation findings, qualitative observations, and appendix details that affect understanding; only shorten when the user explicitly asks for brevity
-- **Minimum note length**: final saved notes must be ≥3000 effective words by default; expand with evidence-backed technical content if shorter
+- **Notes should be as detailed as necessary by default**: include all major method details, experiment settings, ablation findings, qualitative observations, and appendix details that affect understanding; do not add material solely to make the note longer
+- **No forced minimum length**: final saved notes are judged by coverage, specificity, source grounding, and readability. `effective_words` may reveal suspiciously shallow notes, but it must not force padding once the paper is adequately covered
 - **Detailed does not mean padded**: every added paragraph should explain a concrete mechanism, evidence item, design trade-off, limitation, or reproducibility detail from the paper/code
 - **ALWAYS search for code**: even if paper says "will release", search anyway — it may already be public
 - **Figures must be included**: at minimum the architecture diagram and key result figures
@@ -711,7 +741,9 @@ These are real bugs found in past notes. Check every note against this list.
   - If the paper devotes a full section to a topic, the notes should cover: motivation for the design, technical details, key equations/algorithms, and limitations/caveats
   - Don't summarize a 2-page section in 3 bullet points
   - Include appendix material when it contains training configs, extra ablations, prompt/evaluation details, or implementation notes that change interpretation
-- **Check**: after writing, scan for any section <10 lines that corresponds to a major paper section; if found, expand it before review unless the paper itself is genuinely terse
+  - Don't compress many appendix prompt policies, benchmark adapters, or implementation caveats into one paragraph; split by policy family / benchmark / code path
+- **Check**: after writing, scan for any major topic that is both dense and prose-only. If a paragraph mixes multiple components, benchmarks, prompt policies, or code paths, refactor it into `####` subsections, bullets, or a compact table before review.
+- **Rendered-density check**: also scan for `###` sections that have many consecutive short prose paragraphs but no `####` anchors. If it would still render as an uninterrupted screen of text, split by semantic role rather than merely adding blank lines.
 
 ### P8: `<img>` tag and text on adjacent lines breaks inline LaTeX
 - **Bug**: `<img>` tag on its own line followed by "Figure N 解读" text on the very next line (no blank line in between) causes `$...$` inline math in the text to render as raw text instead of LaTeX
